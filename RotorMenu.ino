@@ -30,19 +30,33 @@ static int numRepeat = 0;
 static char lastLive0[64] = "";
 static char lastLive1[64] = "";
 static char lastCalStatus[48] = "";
+static char lastHeaderIp[24] = "";
 
 static const unsigned long CAL_ABORT_MS = 5000;
-static const unsigned long CAL_STOP_MS = 1200;
-static const int CAL_MOVE_EPS = 12;
-static const int CAL_BACK_DIGITS = 80;
+static const unsigned long CAL_NEAR_MS = 1800;
+static const unsigned long CAL_BACK_MS = 4000;
+static const unsigned long CAL_STOP_MS = 900;
+static const unsigned long CAL_SPEED_MS = 250;
+static const float CAL_NOISE_BAND = 12.0f;       // Stand-Rauschen des Drahtpotis +-10
+static const float CAL_PROGRESS_DIGITS = 22.0f;
+static const float CAL_MIN_TRAVEL = 80.0f;
+static const int CAL_BACK_DIGITS = 28;
 
 static CalPhase calPhase = CAL_IDLE;
 static int calJogCmd = 0;
 static int calPhaseCmd = 0;
-static float calWatchRaw = 0;
 static float calStopRaw = 0;
-static unsigned long calWatchAt = 0;
+static float calEndRaw = 0;
+static float calPrevFilt = 0;
+static float calSpeed = 0;
+static float calBest = 0;
+static unsigned long calPhaseAt = 0;
+static unsigned long calSlowAt = 0;
+static unsigned long calSpeedAt = 0;
 static bool calSawMove = false;
+static bool calCwDone = false;
+static bool calCcwDone = false;
+static bool calFirstSeek = false;
 static char calStatus[48] = "";
 
 int calMotorCmd() {
@@ -77,13 +91,33 @@ void calStopAll() {
   }
 }
 
+static const char *calMsgFor(CalPhase phase) {
+  switch (phase) {
+    case CAL_CW_SEEK: return "Kalib: CW zum Anschlag";
+    case CAL_CCW_SEEK: return "Kalib: CCW zum Anschlag";
+    case CAL_CW_BACK:
+    case CAL_CCW_BACK: return "Kalib: etwas zurueck";
+    default: return "Kalib:";
+  }
+}
+
+static int calCmdFor(CalPhase phase) {
+  if (phase == CAL_CW_SEEK || phase == CAL_CCW_BACK) return 2;
+  if (phase == CAL_CCW_SEEK || phase == CAL_CW_BACK) return 1;
+  return 0;
+}
+
 static void calBeginPhase(CalPhase phase, int cmd, const char *msg) {
   calPhase = phase;
   calPhaseCmd = cmd;
   calJogCmd = 0;
-  calWatchRaw = dig_AZ;
-  calStopRaw = dig_AZ;
-  calWatchAt = millis();
+  calStopRaw = dig_AZ_m;
+  calPrevFilt = dig_AZ_m;
+  calSpeed = 0;
+  calBest = 0;
+  calPhaseAt = millis();
+  calSlowAt = millis();
+  calSpeedAt = millis();
   calSawMove = false;
   calSetStatus(msg);
 }
@@ -95,50 +129,118 @@ static void calAbort(const char *msg) {
   calSetStatus(msg);
 }
 
-static void calWatchRawMove() {
-  if (abs(dig_AZ - calWatchRaw) >= CAL_MOVE_EPS) {
-    calWatchRaw = dig_AZ;
-    calWatchAt = millis();
-    calSawMove = true;
+static void calUpdateSpeed() {
+  unsigned long now = millis();
+  if (calSpeedAt == 0) {
+    calSpeedAt = now;
+    calPrevFilt = dig_AZ_m;
+    return;
   }
+  unsigned long dtMs = now - calSpeedAt;
+  if (dtMs < CAL_SPEED_MS) return;
+  float d = fabsf(dig_AZ_m - calPrevFilt);
+  calPrevFilt = dig_AZ_m;
+  calSpeedAt = now;
+  float inst = (d < CAL_NOISE_BAND) ? 0.0f : (d * 1000.0f / (float)dtMs);
+  calSpeed = calSpeed * 0.8f + inst * 0.2f;
+  if (calSpeed < 8.0f) calSpeed = 0;
+}
+
+static bool calNearEnd(float stored) {
+  int span = abs(az_max_digit - az_min_digit);
+  if (span < 400) return false;
+  int eps = span / 12;
+  if (eps < 80) eps = 80;
+  return fabsf(dig_AZ_m - stored) <= (float)eps;
+}
+
+static void calStartBack(CalPhase backPhase) {
+  calEndRaw = dig_AZ_m;
+  calBeginPhase(backPhase, calCmdFor(backPhase), calMsgFor(backPhase));
+}
+
+static void calAfterBackOk() {
+  if (calPhase == CAL_CW_BACK) {
+    az_max_digit = (int)calEndRaw;
+    preferences.putInt("az_max_digit", az_max_digit);
+    calCwDone = true;
+  } else {
+    az_min_digit = (int)calEndRaw;
+    preferences.putInt("az_min_digit", az_min_digit);
+    calCcwDone = true;
+  }
+  if (calCwDone && calCcwDone) {
+    calPhase = CAL_IDLE;
+    calPhaseCmd = 0;
+    calSetStatus("Kalib: fertig");
+    return;
+  }
+  CalPhase next = calCwDone ? CAL_CCW_SEEK : CAL_CW_SEEK;
+  calFirstSeek = false;
+  calBeginPhase(next, calCmdFor(next), calMsgFor(next));
+}
+
+static void calStartAuto() {
+  calCwDone = false;
+  calCcwDone = false;
+  calFirstSeek = true;
+  int span = abs(az_max_digit - az_min_digit);
+  bool startCcw = false;
+  if (span >= 400) {
+    startCcw = fabsf(dig_AZ_m - (float)az_min_digit) <= fabsf(dig_AZ_m - (float)az_max_digit);
+  }
+  CalPhase first = startCcw ? CAL_CCW_SEEK : CAL_CW_SEEK;
+  calBeginPhase(first, calCmdFor(first), calMsgFor(first));
 }
 
 void calService() {
+  calUpdateSpeed();
   if (calPhase == CAL_IDLE) return;
 
-  calWatchRawMove();
-  unsigned long still = millis() - calWatchAt;
+  float pos = dig_AZ_m;
+  float traveled = fabsf(pos - calStopRaw);
+  unsigned long now = millis();
 
-  if (still >= CAL_ABORT_MS) {
-    calAbort("Kalib: Abbruch, kein Weg");
-    return;
+  if (traveled >= calBest + CAL_PROGRESS_DIGITS) {
+    calBest = traveled;
+    calSawMove = true;
+    calSlowAt = now;
+  }
+
+  if (!calSawMove) {
+    unsigned long waitMs = CAL_ABORT_MS;
+    bool maybeAlreadyThere = false;
+    if (calPhase == CAL_CW_SEEK) {
+      maybeAlreadyThere = calFirstSeek && calNearEnd((float)az_max_digit);
+      if (maybeAlreadyThere) waitMs = CAL_NEAR_MS;
+    } else if (calPhase == CAL_CCW_SEEK) {
+      maybeAlreadyThere = calFirstSeek && calNearEnd((float)az_min_digit);
+      if (maybeAlreadyThere) waitMs = CAL_NEAR_MS;
+    }
+    if (now - calPhaseAt >= waitMs) {
+      if (maybeAlreadyThere) {
+        calStartBack(calPhase == CAL_CW_SEEK ? CAL_CW_BACK : CAL_CCW_BACK);
+      } else {
+        calAbort("Kalib: Abbruch, kein Weg");
+      }
+      return;
+    }
   }
 
   if (calPhase == CAL_CW_SEEK || calPhase == CAL_CCW_SEEK) {
-    if (calSawMove && still >= CAL_STOP_MS) {
-      calStopRaw = dig_AZ;
-      if (calPhase == CAL_CW_SEEK) {
-        calBeginPhase(CAL_CW_BACK, 1, "Kalib: etwas zurueck");
-      } else {
-        calBeginPhase(CAL_CCW_BACK, 2, "Kalib: etwas zurueck");
-      }
+    if (calSawMove && calBest >= CAL_MIN_TRAVEL && (now - calSlowAt >= CAL_STOP_MS)) {
+      calStartBack(calPhase == CAL_CW_SEEK ? CAL_CW_BACK : CAL_CCW_BACK);
     }
     return;
   }
 
   if (calPhase == CAL_CW_BACK || calPhase == CAL_CCW_BACK) {
-    if (abs(dig_AZ - calStopRaw) >= CAL_BACK_DIGITS) {
-      if (calPhase == CAL_CW_BACK) {
-        az_min_digit = (int)dig_AZ_f;
-        preferences.putInt("az_min_digit", az_min_digit);
-        calBeginPhase(CAL_CCW_SEEK, 1, "Kalib: CCW zum Anschlag");
-      } else {
-        az_max_digit = (int)dig_AZ_f;
-        preferences.putInt("az_max_digit", az_max_digit);
-        calPhase = CAL_IDLE;
-        calPhaseCmd = 0;
-        calSetStatus("Kalib: fertig");
-      }
+    if (now - calPhaseAt >= CAL_BACK_MS) {
+      calAbort("Kalib: Abbruch, kein Weg");
+      return;
+    }
+    if (traveled >= (float)CAL_BACK_DIGITS) {
+      calAfterBackOk();
     }
   }
 }
@@ -146,6 +248,7 @@ void calService() {
 static void menuClearLiveCache() {
   lastLive0[0] = '\0';
   lastLive1[0] = '\0';
+  lastHeaderIp[0] = '\0';
 }
 
 static void menuEnsureRowSprite() {
@@ -304,11 +407,11 @@ static void menuLabel(int i, char *buf, size_t n) {
       break;
     case MP_CAL:
       switch (i) {
-        case 0: snprintf(buf, n, "Roh: %d  Filt: %d", (int)dig_AZ, (int)dig_AZ_f); break;
+        case 0: snprintf(buf, n, "Roh: %d  Med: %d  %d/s", (int)dig_AZ, (int)dig_AZ_m, (int)(calSpeed + 0.5f)); break;
         case 1: snprintf(buf, n, calJogCmd == 1 ? "CCW laeuft...  (stop)" : "CCW fahren"); break;
         case 2: snprintf(buf, n, calJogCmd == 2 ? "CW laeuft...  (stop)" : "CW fahren"); break;
-        case 3: snprintf(buf, n, "Min speichern (%d)", az_min_digit); break;
-        case 4: snprintf(buf, n, "Max speichern (%d)", az_max_digit); break;
+        case 3: snprintf(buf, n, "Max CCW speichern (%d)", az_min_digit); break;
+        case 4: snprintf(buf, n, "MAX CW speichern (%d)", az_max_digit); break;
         case 5: snprintf(buf, n, "Overshoot: %d'", a_overshoot); break;
         case 6: snprintf(buf, n, calPhase != CAL_IDLE ? "Kalibrierfahrt  (stop)" : "Kalibrierfahrt"); break;
         case 7: snprintf(buf, n, "Zurueck"); break;
@@ -373,12 +476,29 @@ static void menuDrawList() {
   if (menuPage == MP_CAL) calDrawStatus();
 }
 
+static void menuDrawHeaderIp(bool force) {
+  if (menuPage != MP_SETUP) return;
+  char ip[24];
+  snprintf(ip, sizeof(ip), "%s", wifiIpCurrent().c_str());
+  if (!force && strcmp(ip, lastHeaderIp) == 0) return;
+  strncpy(lastHeaderIp, ip, sizeof(lastHeaderIp) - 1);
+  lastHeaderIp[sizeof(lastHeaderIp) - 1] = '\0';
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
+  tft.setTextPadding(150);
+  tft.drawString(ip, 312, 10, 2);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextPadding(0);
+}
+
 static void menuDrawChrome() {
   tft.fillRect(0, 0, 320, 33, TFT_BLACK);
   tft.setTextDatum(TL_DATUM);
   tft.setTextColor(TFT_CYAN, TFT_BLACK);
   tft.drawString(menuTitle(), 8, 4, 4);
   tft.drawFastHLine(0, 32, 320, TFT_WHITE);
+  lastHeaderIp[0] = '\0';
+  menuDrawHeaderIp(true);
   tft.fillRect(0, 220, 320, 20, TFT_BLACK);
   tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
   if (menuPage == MP_CHAR) {
@@ -819,13 +939,13 @@ static void menuSelectCal() {
       break;
     case 3:
       calStopAll();
-      az_min_digit = (int)dig_AZ_f;
+      az_min_digit = (int)dig_AZ_m;
       preferences.putInt("az_min_digit", az_min_digit);
       menuDrawRow(3);
       break;
     case 4:
       calStopAll();
-      az_max_digit = (int)dig_AZ_f;
+      az_max_digit = (int)dig_AZ_m;
       preferences.putInt("az_max_digit", az_max_digit);
       menuDrawRow(4);
       break;
@@ -837,7 +957,7 @@ static void menuSelectCal() {
       if (calPhase != CAL_IDLE) {
         calAbort("Kalib: Abbruch");
       } else {
-        calBeginPhase(CAL_CW_SEEK, 2, "Kalib: CW zum Anschlag");
+        calStartAuto();
       }
       menuDrawRow(1);
       menuDrawRow(2);
@@ -951,5 +1071,9 @@ void menuRefreshLive() {
       lastLive1[sizeof(lastLive1) - 1] = '\0';
       menuDrawRow(1);
     }
+    return;
+  }
+  if (menuPage == MP_SETUP) {
+    menuDrawHeaderIp(false);
   }
 }

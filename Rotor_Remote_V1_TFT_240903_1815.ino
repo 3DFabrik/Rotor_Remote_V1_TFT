@@ -1,40 +1,46 @@
 //      CDE Rotor Control
 //      By Patric Elsen
 //      DF7ZZ
-//      Ver. 06.10.2026 07:00
+//      Ver. 06.10.2026 09:50
 
 // Kalman-Filter-Klasse definieren
 class KalmanFilter {
 public:
   KalmanFilter(float processNoise, float measurementNoise, float estimationError, float initialEstimate) {
-    Q = processNoise;      // Prozessrauschen
-    R = measurementNoise;  // Messrauschen
-    P = estimationError;   // Anfangsfehler
-    X = initialEstimate;   // Anfangsschätzung
-    K = 0;                 // Kalman-Verstärkung
+    Q = processNoise;
+    R = measurementNoise;
+    P0 = estimationError;
+    reset(initialEstimate);
+  }
+
+  void reset(float initialEstimate) {
+    X = initialEstimate;
+    P = P0;
+    K = 0;
   }
 
   float update(float measurement) {
-    P = P + Q;                      // Vorhersage-Update
-    K = P / (P + R);                // Kalman-Verstärkung berechnen
-    X = X + K * (measurement - X);  // Schätzung aktualisieren
-    P = (1 - K) * P;                // Fehler-Kovarianz aktualisieren
+    P = P + Q;
+    K = P / (P + R);
+    X = X + K * (measurement - X);
+    P = (1 - K) * P;
     return X;
   }
 
 private:
-  float Q;  // Prozessrauschen
-  float R;  // Messrauschen
-  float P;  // Fehler-Schätzung
-  float X;  // Schätzung
-  float K;  // Kalman-Verstärkung
+  float Q;   // Prozessrauschen in ADC-Digits^2 pro Sample (1 ms)
+  float R;   // Messrauschen in ADC-Digits^2
+  float P0;  // Start-Kovarianz
+  float P;
+  float X;
+  float K;
 };
 
-// Globale Variablen und Objekte für den Kalman Filter
-float processNoise = pow(0.05, 2);  // Rauschen des Prozesses, Bei einem großen Wert vertraut der Filter mehr auf die Messungen als auf das Modell. Hier wurde die tatsächliche Winkelgeschwindigkeit 5°/s eingestellt.
-float measurementNoise = 1.5;       // Das Messrauschen, das Unsicherheit in den Messungen beschreibt. Bei einem großen Wert vertraut der Filter mehr auf das Modell als auf die Messungen. (Wert empirisch ermittelt)
-float estimationError = 1;          // Der Fehler in der anfänglichen Schätzung. Dieser Wert wird bei jeder Iteration angepasst.
-float initialEstimate = 0;          // Die Anfangsschätzung des Zustands.
+// Median wirft Drahtpoti-Spikes raus. Kalman glaettet nur die Anzeige, nicht die Kalibrierung.
+float processNoise = 0.02f;
+float measurementNoise = 50.0f;
+float estimationError = 50.0f;
+float initialEstimate = 0;
 
 KalmanFilter kalman(processNoise, measurementNoise, estimationError, initialEstimate);
 
@@ -44,7 +50,7 @@ BluetoothSerial SerialBT;
 #include <Preferences.h>
 Preferences preferences;    // Objekt für die Verwendung des Preferences-Speichers
 #include <RunningMedian.h>  // Running median Filter for the sensor input
-RunningMedian samples = RunningMedian(1000);
+RunningMedian samples = RunningMedian(51);
 #include <TFT_eSPI.h>  // Graphics and font library for ST7789 driver chip, be careful with updating as the fucking update will delete your pin-settings
 #include <SPI.h>
 #include <WiFi.h>
@@ -62,9 +68,14 @@ TFT_eSprite spr_angle = TFT_eSprite(&tft);
 bool debug = false;
 bool menuOpen = false;
 bool msgStuck = false;
-String lastLinkStatus = "";
+uint32_t lastFooterKey = 0xFFFFFFFF;
+unsigned long glitchMsgUntil = 0;
 bool serialBtOn = false;
 bool wifiWanted = false;
+
+static const int FOOT_Y = 214;
+static const int FOOT_H = 26;
+static const int FOOT_MSG_W = 218;
 
 #define LINK_BT 0
 #define LINK_WIFI 1
@@ -106,8 +117,9 @@ bool but_CCW = false;
 bool but_BRK = false;
 bool but_CW = false;
 
-float dig_AZ = 0;               // unfiltered bits of AZ-pin
-float dig_AZ_f = 0;             // Kalman filtered bits of AZ-pin
+float dig_AZ = 0;               // Rohwert ADC (spiked)
+float dig_AZ_m = 0;             // Median, spike-bereinigt, schnell
+float dig_AZ_f = 0;             // Kalman auf dem Median, fuer Anzeige
 float azimut = 0;               // unfiltered azimut
 float azimut_abs = 0;           // absolut azimuth (0-360°) as target for automatic rotor movement
 int azimut_tar = 0;             // azimut target as requested via serial port
@@ -153,6 +165,7 @@ const char *linkModeLabel();
 String linkStatusText();
 const char *wifiStateLabel();
 String wifiIpCurrent();
+int wifiRssiBars();
 void applyLinkMode();
 void applyAzimuthTarget(int compassDeg);
 void stopAutorotate();
@@ -180,6 +193,7 @@ int calMotorCmd();
 void calStopAll();
 void drawMainScreen();
 void drawLinkStatus();
+void drawFooterAlert();
 void readButtons();
 void processButtonEvents();
 void replyBoth(const String &msg);
@@ -211,7 +225,11 @@ void setup() {
   ledcWrite(LEDPin, 25);                    // Say Hello with the ALARM-LED...
   delay(50);                                // Wait 50ms...
   ledcWrite(LEDPin, 0);                     // And LED off
-  initialEstimate = analogRead(pin_in_AZ);  // init kalman with first value
+  initialEstimate = analogRead(pin_in_AZ);
+  kalman.reset(initialEstimate);
+  dig_AZ = initialEstimate;
+  dig_AZ_m = initialEstimate;
+  dig_AZ_f = initialEstimate;
 
   spr.createSprite(320, 120);              // Erstelle das Sprite
   spr.setTextColor(TFT_WHITE, TFT_BLACK);  // Textfarbe festlegen
@@ -261,9 +279,7 @@ void loop() {  //***************************************************************
           msgStuck = true;
           Serial.println("Rotor stuck detection fired!");
           ledcWrite(LEDPin, 25);
-          tft.setTextColor(TFT_RED, TFT_BLACK);
-          tft.drawString("ROTOR STUCK!", 70, 215, 4);
-          tft.setTextColor(TFT_WHITE, TFT_BLACK);
+          drawFooterAlert();
         }
       }
     }
@@ -324,14 +340,12 @@ void processBluetoothInput() {
   }
 }
 
-void CalcPosition() {  // Running average Version
-
+void CalcPosition() {
   dig_AZ = analogRead(pin_in_AZ);
   samples.add(dig_AZ);
-  long m = samples.getMedian();
-  long a = samples.getAverage();
-  dig_AZ_f = kalman.update((m + a) / 2);
-  if (abs(dig_AZ - dig_AZ_f) >= 300) alarmOn = true;
+  dig_AZ_m = samples.getMedian();
+  dig_AZ_f = kalman.update(dig_AZ_m);
+  if (abs(dig_AZ - dig_AZ_m) >= 300) alarmOn = true;
 
 
   // Berechnung des gefilterten Winkelwerts in Grad (float)
@@ -363,28 +377,25 @@ float calculateFilteredSpeed(float newSpeed) {
 }
 
 void glitchalarm() { // this switches off the alarm LED and gives a Display message for a short time
-  
+  unsigned long now = millis();
+
   if ((!ledOn) && (alarmOn)) {
-    ledcWrite(LEDPin, 25);  // Schalte die LED ein
-    if (!menuOpen) {
-      tft.setTextColor(TFT_RED, TFT_BLACK);
-      tft.drawString("SENSOR GLITCH", 60, 210, 4);
-      tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    }
-    startTime = millis();  // Speichere die aktuelle Zeit
-    ledOn = true;          // Markiere die LED als eingeschaltet
+    ledcWrite(LEDPin, 25);
+    startTime = now;
+    ledOn = true;
+    glitchMsgUntil = now + 400;
+    drawFooterAlert();
   }
 
-  // Überprüfe, ob die Zeit abgelaufen ist
-  if (ledOn && (millis() - startTime >= blinkDuration)) {
-    ledcWrite(LEDPin, 0);  // Schalte die LED aus
-    if (!menuOpen) {
-      tft.setTextColor(TFT_BLACK, TFT_BLACK);
-      tft.drawString("SENSOR GLITCH", 60, 210, 4);
-      tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    }
-    ledOn = false;    // Markiere die LED als ausgeschaltet
-    alarmOn = false;  // Setze den Alarmzustand zurück
+  if (ledOn && (now - startTime >= blinkDuration)) {
+    ledcWrite(LEDPin, 0);
+    ledOn = false;
+    alarmOn = false;
+  }
+
+  if (glitchMsgUntil && now >= glitchMsgUntil) {
+    glitchMsgUntil = 0;
+    drawFooterAlert();
   }
 }
 
@@ -513,11 +524,7 @@ void DriveRotator(int command) {
 
     ledcWrite(LEDPin, 0);
     msgStuck = false;
-    if (!menuOpen) {
-      tft.setTextColor(TFT_BLACK, TFT_BLACK);
-      tft.drawString("ROTOR STUCK!", 70, 215, 4);
-      tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    }
+    drawFooterAlert();
     switch (command) {  // 0=nichts, 1=CCW, 2=CW
 
       case 1:
@@ -693,22 +700,22 @@ void SerComm(char *buffer) {
 
   // looking for  <D> - Request a digital reading from the sensor
   if (strncmp(buffer, "D", 1) == 0) {
-    Serial.println("dig_AZ = " + String(dig_AZ) + " / dig_AZ_f = " + String(dig_AZ_f));
+    Serial.println("dig_AZ = " + String(dig_AZ) + " / med = " + String(dig_AZ_m) + " / dig_AZ_f = " + String(dig_AZ_f));
     return;
   }
 
   // looking for  <L> - Store the minimum rotor position
   if (strncmp(buffer, "L", 1) == 0) {
-    preferences.putInt("az_min_digit", dig_AZ_f);
-    Serial.println("Minimum position stored, value = " + String(dig_AZ_f, 0) + " digits");
+    preferences.putInt("az_min_digit", dig_AZ_m);
+    Serial.println("Minimum position stored, value = " + String(dig_AZ_m, 0) + " digits");
     PrintStoredSetup();
     return;
   }
 
   // looking for  <H> - Store the maximum rotor position
   if (strncmp(buffer, "H", 1) == 0) {
-    preferences.putInt("az_max_digit", dig_AZ_f);
-    Serial.println("Maximum position stored, value = " + String(dig_AZ_f, 0) + " digits");
+    preferences.putInt("az_max_digit", dig_AZ_m);
+    Serial.println("Maximum position stored, value = " + String(dig_AZ_m, 0) + " digits");
     PrintStoredSetup();
     return;
   }
@@ -891,7 +898,8 @@ void processButtonEvents() {
 
 void drawMainScreen() {
   angle_old = -1000;
-  lastLinkStatus = "";
+  lastFooterKey = 0xFFFFFFFF;
+  glitchMsgUntil = 0;
   if (spr_angle.width() != 320 || spr_angle.height() != 25) {
     spr_angle.deleteSprite();
     spr_angle.createSprite(320, 25);
@@ -905,16 +913,89 @@ void drawMainScreen() {
   tft_update();
 }
 
-void drawLinkStatus() {
-  if (menuOpen || alarmOn || ledOn || msgStuck) return;
-  String s = linkStatusText();
-  if (s == lastLinkStatus) return;
-  lastLinkStatus = s;
+static void drawFanArc(int cx, int cy, int r, uint16_t color) {
+  float t = -0.75f;
+  int x0 = cx + (int)(r * sin(t));
+  int y0 = cy - (int)(r * cos(t));
+  for (int i = 1; i <= 8; i++) {
+    t = -0.75f + (1.5f * i) / 8.0f;
+    int x = cx + (int)(r * sin(t));
+    int y = cy - (int)(r * cos(t));
+    tft.drawLine(x0, y0, x, y, color);
+    tft.drawLine(x0 + 1, y0, x + 1, y, color);
+    x0 = x;
+    y0 = y;
+  }
+}
+
+static void drawBtIcon(int x, int y, uint16_t color) {
+  int cx = x + 6;
+  int y0 = y;
+  int y1 = y + 16;
+  int ym = y + 8;
+  int r = x + 12;
+  tft.drawLine(cx, y0, cx, y1, color);
+  tft.drawLine(cx + 1, y0, cx + 1, y1, color);
+  tft.drawLine(cx, y0, r, y0 + 4, color);
+  tft.drawLine(r, y0 + 4, cx, ym, color);
+  tft.drawLine(cx, ym, r, y1 - 4, color);
+  tft.drawLine(r, y1 - 4, cx, y1, color);
+  tft.drawLine(x, y0 + 4, r, y1 - 4, color);
+  tft.drawLine(x, y1 - 4, r, y0 + 4, color);
+}
+
+static void drawWifiIcon(int cx, int cy, bool connected, int bars, uint16_t color) {
+  uint16_t dim = TFT_DARKGREY;
+  tft.fillCircle(cx, cy, 2, color);
+  drawFanArc(cx, cy, 6, (connected && bars >= 1) ? color : dim);
+  drawFanArc(cx, cy, 11, (connected && bars >= 2) ? color : dim);
+  drawFanArc(cx, cy, 16, (connected && bars >= 3) ? color : dim);
+}
+
+void drawFooterAlert() {
+  if (menuOpen) return;
+  tft.fillRect(0, FOOT_Y, FOOT_MSG_W, FOOT_H, TFT_BLACK);
   tft.setTextDatum(TL_DATUM);
-  tft.setTextColor(TFT_CYAN, TFT_BLACK);
-  tft.setTextPadding(320);
-  tft.drawString(s, 4, 224, 2);
-  tft.setTextPadding(0);
+  tft.setTextColor(TFT_RED, TFT_BLACK);
+  if (msgStuck) {
+    tft.drawString("ROTOR STUCK!", 6, FOOT_Y + 5, 2);
+  } else if (glitchMsgUntil && millis() < glitchMsgUntil) {
+    tft.drawString("SENSOR GLITCH", 6, FOOT_Y + 5, 2);
+  }
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+}
+
+void drawLinkStatus() {
+  if (menuOpen) return;
+
+  bool btOn = serialBtOn;
+  bool btCli = btOn && SerialBT.hasClient();
+  bool wifiOn = linkWantsWifi();
+  int st = wifiOn ? (int)WiFi.status() : (int)WL_DISCONNECTED;
+  bool wifiOk = (st == WL_CONNECTED);
+  int bars = wifiOk ? wifiRssiBars() : 0;
+
+  uint32_t key = (btOn ? 1u : 0u) | (btCli ? 2u : 0u) | (wifiOn ? 4u : 0u) |
+                 (wifiOk ? 8u : 0u) | ((uint32_t)(bars & 3) << 4) |
+                 ((uint32_t)st << 8);
+  if (key == lastFooterKey) return;
+  lastFooterKey = key;
+
+  tft.fillRect(FOOT_MSG_W, FOOT_Y, 320 - FOOT_MSG_W, FOOT_H, TFT_BLACK);
+
+  int x = 318;
+  if (wifiOn) {
+    uint16_t col = TFT_CYAN;
+    if (wifiOk) col = TFT_CYAN;
+    else if (st == WL_CONNECT_FAILED || st == WL_NO_SSID_AVAIL) col = TFT_ORANGE;
+    else col = TFT_YELLOW;
+    x -= 34;
+    drawWifiIcon(x + 16, FOOT_Y + 20, wifiOk, bars, col);
+  }
+  if (btOn) {
+    x -= 22;
+    drawBtIcon(x, FOOT_Y + 4, btCli ? TFT_GREEN : TFT_CYAN);
+  }
 }
 
 void replyBoth(const String &msg) {

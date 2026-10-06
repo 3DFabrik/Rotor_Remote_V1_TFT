@@ -34,6 +34,15 @@ String wifiIpCurrent() {
   return ipMode ? ipLocal : String("-");
 }
 
+int wifiRssiBars() {
+  if (WiFi.status() != WL_CONNECTED) return 0;
+  int r = WiFi.RSSI();
+  if (r >= -55) return 3;
+  if (r >= -70) return 2;
+  if (r >= -85) return 1;
+  return 0;
+}
+
 String linkStatusText() {
   String s = "";
   if (linkWantsBt()) s += "BT";

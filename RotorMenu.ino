@@ -1,6 +1,6 @@
 const int MENU_TOP = 36;
-const int MENU_ROW = 18;
-const int MENU_VIS = 10;
+const int MENU_ROW = 20;
+const int MENU_VIS = 9;
 
 const char MENU_CHARS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -_.,:;!?@#%&*+=/";
 const int MENU_CHAR_N = (int)sizeof(MENU_CHARS) - 1;
@@ -251,11 +251,9 @@ static void menuClearLiveCache() {
   lastHeaderIp[0] = '\0';
 }
 
-static void menuEnsureRowSprite() {
-  if (spr_angle.width() != 320 || spr_angle.height() != MENU_ROW) {
-    spr_angle.deleteSprite();
-    spr_angle.createSprite(320, MENU_ROW);
-  }
+static void menuFreeSprites() {
+  spr.deleteSprite();
+  spr_angle.deleteSprite();
 }
 
 static void parseIp(const String &s, int o[4]) {
@@ -319,7 +317,7 @@ int menuCount() {
       return wifiScanCount() + 2;
     case MP_BT: return 3;
     case MP_CAL: return 8;
-    case MP_SYS: return 3;
+    case MP_SYS: return 4;
     default: return 0;
   }
 }
@@ -333,6 +331,9 @@ static uint8_t menuKind(int i) {
       if (wifiScanRunning() && i == 0) return 0;
       return 1;
     case MP_CAL:
+      if (i == 0) return 0;
+      return 1;
+    case MP_SYS:
       if (i == 0) return 0;
       return 1;
     default:
@@ -419,9 +420,16 @@ static void menuLabel(int i, char *buf, size_t n) {
       break;
     case MP_SYS:
       switch (i) {
-        case 0: snprintf(buf, n, "Debug: %s", debug ? "An" : "Aus"); break;
-        case 1: snprintf(buf, n, "Neu starten"); break;
-        case 2: snprintf(buf, n, "Zurueck"); break;
+        case 0:
+          if (WiFi.status() == WL_CONNECTED) {
+            snprintf(buf, n, "OTA http://%s/update", WiFi.localIP().toString().c_str());
+          } else {
+            snprintf(buf, n, "OTA: WLAN noetig");
+          }
+          break;
+        case 1: snprintf(buf, n, "Debug: %s", debug ? "An" : "Aus"); break;
+        case 2: snprintf(buf, n, "Neu starten"); break;
+        case 3: snprintf(buf, n, "Zurueck"); break;
       }
       break;
     default:
@@ -444,26 +452,21 @@ static void menuDrawRow(int absIndex) {
   int y = MENU_TOP + vis * MENU_ROW;
   if (absIndex < menuScroll || vis >= MENU_VIS) return;
 
-  menuEnsureRowSprite();
   uint16_t bg = TFT_BLACK;
-  uint16_t fg = TFT_SILVER;
+  uint16_t fg = TFT_WHITE;
+  char buf[64] = "";
   if (absIndex >= 0 && absIndex < n) {
     bool sel = (absIndex == menuSel);
     bg = sel ? TFT_NAVY : TFT_BLACK;
-    fg = TFT_WHITE;
-    if (menuKind(absIndex) == 0) fg = TFT_SILVER;
-    if (sel) fg = TFT_YELLOW;
+    fg = sel ? TFT_YELLOW : (menuKind(absIndex) == 0 ? TFT_SILVER : TFT_WHITE);
+    menuLabel(absIndex, buf, sizeof(buf));
   }
 
-  spr_angle.fillSprite(bg);
-  if (absIndex >= 0 && absIndex < n) {
-    char buf[64];
-    menuLabel(absIndex, buf, sizeof(buf));
-    spr_angle.setTextDatum(TL_DATUM);
-    spr_angle.setTextColor(fg, bg);
-    spr_angle.drawString(buf, 8, 1, 2);
-  }
-  spr_angle.pushSprite(0, y);
+  tft.fillRect(0, y, 320, MENU_ROW, bg);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextPadding(0);
+  tft.setTextColor(fg, bg);
+  if (buf[0]) tft.drawString(buf, 8, y + 2, 2);
 }
 
 static void menuDrawList() {
@@ -494,6 +497,7 @@ static void menuDrawHeaderIp(bool force) {
 static void menuDrawChrome() {
   tft.fillRect(0, 0, 320, 33, TFT_BLACK);
   tft.setTextDatum(TL_DATUM);
+  tft.setTextPadding(0);
   tft.setTextColor(TFT_CYAN, TFT_BLACK);
   tft.drawString(menuTitle(), 8, 4, 4);
   tft.drawFastHLine(0, 32, 320, TFT_WHITE);
@@ -674,6 +678,7 @@ static void commitNumEdit() {
 void menuEnter() {
   menuOpen = true;
   stopAutorotate();
+  menuFreeSprites();
   menuGoto(MP_SETUP);
 }
 
@@ -971,11 +976,11 @@ static void menuSelectCal() {
 
 static void menuSelectSys() {
   switch (menuSel) {
-    case 0:
+    case 1:
       debug = !debug;
       menuDrawRow(menuSel);
       break;
-    case 1:
+    case 2:
       tft.fillScreen(TFT_BLACK);
       tft.setTextDatum(MC_DATUM);
       tft.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -983,7 +988,7 @@ static void menuSelectSys() {
       delay(200);
       ESP.restart();
       break;
-    case 2:
+    case 3:
       menuGoto(MP_SETUP);
       break;
   }
@@ -1075,5 +1080,14 @@ void menuRefreshLive() {
   }
   if (menuPage == MP_SETUP) {
     menuDrawHeaderIp(false);
+    return;
+  }
+  if (menuPage == MP_SYS) {
+    menuLabel(0, buf, sizeof(buf));
+    if (strcmp(buf, lastLive0) != 0) {
+      strncpy(lastLive0, buf, sizeof(lastLive0) - 1);
+      lastLive0[sizeof(lastLive0) - 1] = '\0';
+      menuDrawRow(0);
+    }
   }
 }

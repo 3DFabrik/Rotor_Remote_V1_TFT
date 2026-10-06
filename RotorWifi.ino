@@ -1,6 +1,8 @@
 WiFiServer rotServer;
 WiFiClient rotClient;
 bool rotServerStarted = false;
+WebServer httpOta(80);
+static bool otaReady = false;
 
 static int wifiScanState = 0;  // 0 idle, 1 running, 2 done
 static int wifiScanN = 0;
@@ -43,22 +45,96 @@ int wifiRssiBars() {
   return 0;
 }
 
-String linkStatusText() {
-  String s = "";
-  if (linkWantsBt()) s += "BT";
-  if (linkWantsWifi()) {
-    if (s.length()) s += "  ";
-    s += "WLAN";
-    if (WiFi.status() == WL_CONNECTED) {
-      s += " ";
-      s += WiFi.localIP().toString();
-    } else if (wifiSsid.length() == 0) {
-      s += " --";
+static void otaShowScreen(const char *msg) {
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.drawString(msg, 160, 120, 4);
+  tft.setTextDatum(TL_DATUM);
+}
+
+static void otaStop() {
+  if (!otaReady) return;
+  httpOta.stop();
+  ArduinoOTA.end();
+  otaReady = false;
+}
+
+static void otaBegin() {
+  if (otaReady) return;
+
+  ArduinoOTA.setHostname(btName.length() ? btName.c_str() : "RotorRemote");
+  ArduinoOTA.onStart([]() {
+    stopAutorotate();
+    otaShowScreen("Firmware-Update...");
+  });
+  ArduinoOTA.onEnd([]() {
+    otaShowScreen("Update OK");
+  });
+  ArduinoOTA.onError([](ota_error_t err) {
+    (void)err;
+    otaShowScreen("Update Fehler");
+  });
+  ArduinoOTA.begin();
+
+  httpOta.on("/", HTTP_GET, []() {
+    String ip = WiFi.localIP().toString();
+    String html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>RotorRemote</title>";
+    html += "<style>body{font-family:sans-serif;background:#111;color:#eee;margin:24px}";
+    html += "a{color:#6cf}</style></head><body>";
+    html += "<h1>RotorRemote</h1>";
+    html += "<p>rotctld: " + ip + ":" + String(rotPort) + "</p>";
+    html += "<p><a href='/update'>Firmware online flashen</a></p>";
+    html += "</body></html>";
+    httpOta.send(200, "text/html", html);
+  });
+
+  httpOta.on("/update", HTTP_GET, []() {
+    String html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Firmware</title>";
+    html += "<style>body{font-family:sans-serif;background:#111;color:#eee;margin:24px}";
+    html += "input{font-size:16px;margin-top:12px}</style></head><body>";
+    html += "<h1>Firmware-Update</h1>";
+    html += "<p>App-Image (.ino.bin), nicht das USB-merged.bin.</p>";
+    html += "<form method='POST' action='/update' enctype='multipart/form-data'>";
+    html += "<input type='file' name='firmware' accept='.bin'>";
+    html += "<br><input type='submit' value='Flashen'></form>";
+    html += "</body></html>";
+    httpOta.send(200, "text/html", html);
+  });
+
+  httpOta.on("/update", HTTP_POST, []() {
+    httpOta.sendHeader("Connection", "close");
+    if (Update.hasError()) {
+      httpOta.send(500, "text/plain", "Fehler beim Update");
     } else {
-      s += " ...";
+      httpOta.send(200, "text/plain", "OK, starte neu");
+      delay(400);
+      ESP.restart();
     }
-  }
-  return s;
+  }, []() {
+    HTTPUpload &upload = httpOta.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      stopAutorotate();
+      otaShowScreen("Firmware-Update...");
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) {
+        otaShowScreen("Update OK");
+      } else {
+        otaShowScreen("Update Fehler");
+      }
+    }
+  });
+
+  httpOta.begin();
+  otaReady = true;
+  if (debug) Serial.println("OTA http://" + WiFi.localIP().toString() + "/update");
 }
 
 void rotctlCloseClient() {
@@ -74,6 +150,7 @@ void rotctlStopServer() {
 }
 
 void wifiStop() {
+  otaStop();
   rotctlStopServer();
   wifiWanted = false;
   WiFi.disconnect(true);
@@ -81,6 +158,7 @@ void wifiStop() {
 }
 
 void wifiRestart() {
+  otaStop();
   rotctlStopServer();
   wifiWanted = true;
   WiFi.disconnect(true);
@@ -305,6 +383,9 @@ void wifiService() {
       rotLineLen = 0;
       if (debug) Serial.println("rotctld listening on " + WiFi.localIP().toString() + ":" + String(rotPort));
     }
+    otaBegin();
+    ArduinoOTA.handle();
+    httpOta.handleClient();
     if (rotServer.hasClient()) {
       WiFiClient incoming = rotServer.available();
       if (rotClient && rotClient.connected()) {
@@ -318,7 +399,8 @@ void wifiService() {
     if (rotClient && rotClient.connected()) {
       rotctlRead();
     }
-  } else if (rotServerStarted) {
+  } else if (rotServerStarted || otaReady) {
+    otaStop();
     rotctlStopServer();
   }
 }

@@ -1,7 +1,7 @@
 //      CDE Rotor Control
 //      By Patric Elsen
 //      DF7ZZ
-//      Ver. 06.10.2026 09:50
+//      Ver. 06.10.2026 14:45
 
 // Kalman-Filter-Klasse definieren
 class KalmanFilter {
@@ -54,6 +54,11 @@ RunningMedian samples = RunningMedian(51);
 #include <TFT_eSPI.h>  // Graphics and font library for ST7789 driver chip, be careful with updating as the fucking update will delete your pin-settings
 #include <SPI.h>
 #include <WiFi.h>
+#include <FS.h>
+using fs::FS;
+#include <WebServer.h>
+#include <ArduinoOTA.h>
+#include <Update.h>
 #include <ctype.h>
 #include "RotorTypes.h"
 
@@ -162,7 +167,6 @@ float azimut_abs_old = 0;  // hold the sample taken interv-time before
 String btName = "";        // holds the name of the bluetooth link
 
 const char *linkModeLabel();
-String linkStatusText();
 const char *wifiStateLabel();
 String wifiIpCurrent();
 int wifiRssiBars();
@@ -748,7 +752,10 @@ void SerComm(char *buffer) {
 
 void tft_update() {
   if (menuOpen) return;
-  spr_angle.createSprite(320, 25);
+  if (spr_angle.width() != 320 || spr_angle.height() != 25) {
+    spr_angle.deleteSprite();
+    spr_angle.createSprite(320, 25);
+  }
   spr_angle.setTextDatum(TL_DATUM);  // Textausrichtung TL (TopLeft)
   spr_angle.setTextColor(TFT_WHITE, COLOR_BG);
   spr_angle.fillScreen(TFT_BLACK);
@@ -900,6 +907,12 @@ void drawMainScreen() {
   angle_old = -1000;
   lastFooterKey = 0xFFFFFFFF;
   glitchMsgUntil = 0;
+  if (spr.width() != 320 || spr.height() != 120) {
+    spr.deleteSprite();
+    spr.createSprite(320, 120);
+    spr.setTextColor(TFT_WHITE, TFT_BLACK);
+    spr.setTextDatum(MC_DATUM);
+  }
   if (spr_angle.width() != 320 || spr_angle.height() != 25) {
     spr_angle.deleteSprite();
     spr_angle.createSprite(320, 25);

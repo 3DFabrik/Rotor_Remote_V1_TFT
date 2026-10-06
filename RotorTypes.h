@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef FW_VERSION
+#define FW_VERSION "06.10.2026 20:15"
+#endif
+
 enum MenuPage : uint8_t {
   MP_SETUP,
   MP_WLAN,

@@ -1,6 +1,6 @@
 const int MENU_TOP = 36;
-const int MENU_ROW = 20;
-const int MENU_VIS = 9;
+const int MENU_ROW = 28;
+const int MENU_VIS = 6;
 
 const char MENU_CHARS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -_.,:;!?@#%&*+=/";
 const int MENU_CHAR_N = (int)sizeof(MENU_CHARS) - 1;
@@ -76,7 +76,7 @@ static void calDrawStatus() {
   tft.setTextDatum(TL_DATUM);
   tft.setTextColor(calPhase == CAL_IDLE ? TFT_ORANGE : TFT_GREEN, TFT_BLACK);
   tft.setTextPadding(320);
-  tft.drawString(calStatus, 8, 206, 2);
+  tft.drawString(calStatus, 8, 210, 2);
   tft.setTextPadding(0);
 }
 
@@ -85,19 +85,19 @@ void calStopAll() {
   calPhase = CAL_IDLE;
   calPhaseCmd = 0;
   calSawMove = false;
-  if (calStatus[0] && strncmp(calStatus, "Kalib: fertig", 13) != 0 &&
-      strncmp(calStatus, "Kalib: Abbruch", 14) != 0) {
+  if (calStatus[0] && strncmp(calStatus, "Cal: done", 9) != 0 &&
+      strncmp(calStatus, "Cal: abort", 10) != 0) {
     calSetStatus("");
   }
 }
 
 static const char *calMsgFor(CalPhase phase) {
   switch (phase) {
-    case CAL_CW_SEEK: return "Kalib: CW zum Anschlag";
-    case CAL_CCW_SEEK: return "Kalib: CCW zum Anschlag";
+    case CAL_CW_SEEK: return "Cal: CW to stop";
+    case CAL_CCW_SEEK: return "Cal: CCW to stop";
     case CAL_CW_BACK:
-    case CAL_CCW_BACK: return "Kalib: etwas zurueck";
-    default: return "Kalib:";
+    case CAL_CCW_BACK: return "Cal: back off";
+    default: return "Cal:";
   }
 }
 
@@ -172,7 +172,7 @@ static void calAfterBackOk() {
   if (calCwDone && calCcwDone) {
     calPhase = CAL_IDLE;
     calPhaseCmd = 0;
-    calSetStatus("Kalib: fertig");
+    calSetStatus("Cal: done");
     return;
   }
   CalPhase next = calCwDone ? CAL_CCW_SEEK : CAL_CW_SEEK;
@@ -221,7 +221,7 @@ void calService() {
       if (maybeAlreadyThere) {
         calStartBack(calPhase == CAL_CW_SEEK ? CAL_CW_BACK : CAL_CCW_BACK);
       } else {
-        calAbort("Kalib: Abbruch, kein Weg");
+        calAbort("Cal: aborted, no travel");
       }
       return;
     }
@@ -236,7 +236,7 @@ void calService() {
 
   if (calPhase == CAL_CW_BACK || calPhase == CAL_CCW_BACK) {
     if (now - calPhaseAt >= CAL_BACK_MS) {
-      calAbort("Kalib: Abbruch, kein Weg");
+      calAbort("Cal: aborted, no travel");
       return;
     }
     if (traveled >= (float)CAL_BACK_DIGITS) {
@@ -284,22 +284,22 @@ static String joinIp(const int o[4]) {
 
 static const char *menuTitle() {
   switch (menuPage) {
-    case MP_WLAN: return "WLAN";
+    case MP_WLAN: return "Wi-Fi";
     case MP_SSID: return "SSID";
     case MP_BT: return "Bluetooth";
-    case MP_CAL: return "Kalibrierung";
+    case MP_CAL: return "Calibration";
     case MP_SYS: return "System";
     case MP_CHAR:
-      if (editTarget == ED_PASS) return "Passwort";
-      if (editTarget == ED_BTNAME) return "BT-Name";
+      if (editTarget == ED_PASS) return "Password";
+      if (editTarget == ED_BTNAME) return "BT name";
       return "SSID";
     case MP_OCTET:
       if (octTarget == OCT_GW) return "Gateway";
-      if (octTarget == OCT_MASK) return "Netzmaske";
+      if (octTarget == OCT_MASK) return "Netmask";
       if (octTarget == OCT_DNS) return "DNS";
-      return "IP-Adresse";
+      return "IP address";
     case MP_NUM:
-      return (numTarget == NUM_OVER) ? "Overshoot" : "rotctld-Port";
+      return (numTarget == NUM_OVER) ? "Overshoot" : "rotctld port";
     default: return "Setup";
   }
 }
@@ -317,7 +317,7 @@ int menuCount() {
       return wifiScanCount() + 2;
     case MP_BT: return 3;
     case MP_CAL: return 8;
-    case MP_SYS: return 4;
+    case MP_SYS: return 5;
     default: return 0;
   }
 }
@@ -334,7 +334,7 @@ static uint8_t menuKind(int i) {
       if (i == 0) return 0;
       return 1;
     case MP_SYS:
-      if (i == 0) return 0;
+      if (i == 0 || i == 1) return 0;
       return 1;
     default:
       return 1;
@@ -346,12 +346,12 @@ static void menuLabel(int i, char *buf, size_t n) {
   switch (menuPage) {
     case MP_SETUP:
       switch (i) {
-        case 0: snprintf(buf, n, "Betrieb: %s", linkModeLabel()); break;
-        case 1: snprintf(buf, n, "WLAN..."); break;
+        case 0: snprintf(buf, n, "Link: %s", linkModeLabel()); break;
+        case 1: snprintf(buf, n, "Wi-Fi..."); break;
         case 2: snprintf(buf, n, "Bluetooth..."); break;
-        case 3: snprintf(buf, n, "Kalibrierung..."); break;
+        case 3: snprintf(buf, n, "Calibration..."); break;
         case 4: snprintf(buf, n, "System..."); break;
-        case 5: snprintf(buf, n, "Zurueck"); break;
+        case 5: snprintf(buf, n, "Back"); break;
       }
       break;
     case MP_WLAN:
@@ -359,77 +359,78 @@ static void menuLabel(int i, char *buf, size_t n) {
         switch (i) {
           case 0: snprintf(buf, n, "Status: %s", wifiStateLabel()); break;
           case 1: snprintf(buf, n, "IP: %s", wifiIpCurrent().c_str()); break;
-          case 2: snprintf(buf, n, "SSID: %s", wifiSsid.length() ? wifiSsid.c_str() : "(leer)"); break;
-          case 3: snprintf(buf, n, "Passwort: %s", wifiPass.length() ? "********" : "(leer)"); break;
-          case 4: snprintf(buf, n, "Adresse: DHCP"); break;
+          case 2: snprintf(buf, n, "SSID: %s", wifiSsid.length() ? wifiSsid.c_str() : "(empty)"); break;
+          case 3: snprintf(buf, n, "Password: %s", wifiPass.length() ? "********" : "(empty)"); break;
+          case 4: snprintf(buf, n, "Address: DHCP"); break;
           case 5: snprintf(buf, n, "Port: %d", rotPort); break;
-          case 6: snprintf(buf, n, "Speichern und verbinden"); break;
-          case 7: snprintf(buf, n, "Zurueck"); break;
+          case 6: snprintf(buf, n, "Save and connect"); break;
+          case 7: snprintf(buf, n, "Back"); break;
         }
       } else {
         switch (i) {
           case 0: snprintf(buf, n, "Status: %s", wifiStateLabel()); break;
           case 1: snprintf(buf, n, "IP: %s", wifiIpCurrent().c_str()); break;
-          case 2: snprintf(buf, n, "SSID: %s", wifiSsid.length() ? wifiSsid.c_str() : "(leer)"); break;
-          case 3: snprintf(buf, n, "Passwort: %s", wifiPass.length() ? "********" : "(leer)"); break;
-          case 4: snprintf(buf, n, "Adresse: Statisch"); break;
-          case 5: snprintf(buf, n, "Eigene IP: %s", ipLocal.c_str()); break;
+          case 2: snprintf(buf, n, "SSID: %s", wifiSsid.length() ? wifiSsid.c_str() : "(empty)"); break;
+          case 3: snprintf(buf, n, "Password: %s", wifiPass.length() ? "********" : "(empty)"); break;
+          case 4: snprintf(buf, n, "Address: Static"); break;
+          case 5: snprintf(buf, n, "IP: %s", ipLocal.c_str()); break;
           case 6: snprintf(buf, n, "Gateway: %s", ipGw.c_str()); break;
-          case 7: snprintf(buf, n, "Maske: %s", ipMask.c_str()); break;
+          case 7: snprintf(buf, n, "Mask: %s", ipMask.c_str()); break;
           case 8: snprintf(buf, n, "DNS: %s", ipDns.c_str()); break;
           case 9: snprintf(buf, n, "Port: %d", rotPort); break;
-          case 10: snprintf(buf, n, "Speichern und verbinden"); break;
-          case 11: snprintf(buf, n, "Zurueck"); break;
+          case 10: snprintf(buf, n, "Save and connect"); break;
+          case 11: snprintf(buf, n, "Back"); break;
         }
       }
       break;
     case MP_SSID:
       if (wifiScanRunning()) {
-        if (i == 0) snprintf(buf, n, "Suche Netze...");
-        else snprintf(buf, n, "Zurueck");
+        if (i == 0) snprintf(buf, n, "Scanning...");
+        else snprintf(buf, n, "Back");
       } else {
         int nets = wifiScanCount();
         if (i < nets) {
           String ssid = wifiScanSSID(i);
           snprintf(buf, n, "%s  %ddBm", ssid.c_str(), wifiScanRSSI(i));
         } else if (i == nets) {
-          snprintf(buf, n, "Manuell...");
+          snprintf(buf, n, "Manual...");
         } else {
-          snprintf(buf, n, "Zurueck");
+          snprintf(buf, n, "Back");
         }
       }
       break;
     case MP_BT:
       switch (i) {
-        case 0: snprintf(buf, n, "Bluetooth: %s", linkWantsBt() ? "An" : "Aus"); break;
+        case 0: snprintf(buf, n, "Bluetooth: %s", linkWantsBt() ? "On" : "Off"); break;
         case 1: snprintf(buf, n, "Name: %s", btName.c_str()); break;
-        case 2: snprintf(buf, n, "Zurueck"); break;
+        case 2: snprintf(buf, n, "Back"); break;
       }
       break;
     case MP_CAL:
       switch (i) {
-        case 0: snprintf(buf, n, "Roh: %d  Med: %d  %d/s", (int)dig_AZ, (int)dig_AZ_m, (int)(calSpeed + 0.5f)); break;
-        case 1: snprintf(buf, n, calJogCmd == 1 ? "CCW laeuft...  (stop)" : "CCW fahren"); break;
-        case 2: snprintf(buf, n, calJogCmd == 2 ? "CW laeuft...  (stop)" : "CW fahren"); break;
-        case 3: snprintf(buf, n, "Max CCW speichern (%d)", az_min_digit); break;
-        case 4: snprintf(buf, n, "MAX CW speichern (%d)", az_max_digit); break;
+        case 0: snprintf(buf, n, "Raw:%d Med:%d %d/s", (int)dig_AZ, (int)dig_AZ_m, (int)(calSpeed + 0.5f)); break;
+        case 1: snprintf(buf, n, calJogCmd == 1 ? "CCW running  (stop)" : "Jog CCW"); break;
+        case 2: snprintf(buf, n, calJogCmd == 2 ? "CW running  (stop)" : "Jog CW"); break;
+        case 3: snprintf(buf, n, "Save Max CCW (%d)", az_min_digit); break;
+        case 4: snprintf(buf, n, "Save MAX CW (%d)", az_max_digit); break;
         case 5: snprintf(buf, n, "Overshoot: %d'", a_overshoot); break;
-        case 6: snprintf(buf, n, calPhase != CAL_IDLE ? "Kalibrierfahrt  (stop)" : "Kalibrierfahrt"); break;
-        case 7: snprintf(buf, n, "Zurueck"); break;
+        case 6: snprintf(buf, n, calPhase != CAL_IDLE ? "Cal run  (stop)" : "Cal run"); break;
+        case 7: snprintf(buf, n, "Back"); break;
       }
       break;
     case MP_SYS:
       switch (i) {
-        case 0:
+        case 0: snprintf(buf, n, "Version: %s", FW_VERSION); break;
+        case 1:
           if (WiFi.status() == WL_CONNECTED) {
-            snprintf(buf, n, "OTA http://%s/update", WiFi.localIP().toString().c_str());
+            snprintf(buf, n, "OTA: %s", WiFi.localIP().toString().c_str());
           } else {
-            snprintf(buf, n, "OTA: WLAN noetig");
+            snprintf(buf, n, "OTA: Wi-Fi needed");
           }
           break;
-        case 1: snprintf(buf, n, "Debug: %s", debug ? "An" : "Aus"); break;
-        case 2: snprintf(buf, n, "Neu starten"); break;
-        case 3: snprintf(buf, n, "Zurueck"); break;
+        case 2: snprintf(buf, n, "Debug: %s", debug ? "On" : "Off"); break;
+        case 3: snprintf(buf, n, "Restart"); break;
+        case 4: snprintf(buf, n, "Back"); break;
       }
       break;
     default:
@@ -466,7 +467,7 @@ static void menuDrawRow(int absIndex) {
   tft.setTextDatum(TL_DATUM);
   tft.setTextPadding(0);
   tft.setTextColor(fg, bg);
-  if (buf[0]) tft.drawString(buf, 8, y + 2, 2);
+  if (buf[0]) tft.drawString(buf, 8, y + 2, 4);
 }
 
 static void menuDrawList() {
@@ -506,13 +507,13 @@ static void menuDrawChrome() {
   tft.fillRect(0, 220, 320, 20, TFT_BLACK);
   tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
   if (menuPage == MP_CHAR) {
-    tft.drawString("CCW/CW Zeichen   BRK uebernehmen   3s Zurueck", 4, 226, 1);
+    tft.drawString("CCW/CW char   BRK take   3s Back", 4, 222, 2);
   } else if (menuPage == MP_OCTET) {
-    tft.drawString("CCW/CW Wert   BRK naechstes Oktett   3s Zurueck", 4, 226, 1);
+    tft.drawString("CCW/CW value   BRK next   3s Back", 4, 222, 2);
   } else if (menuPage == MP_NUM) {
-    tft.drawString("CCW/CW Wert   BRK speichern   3s Zurueck", 4, 226, 1);
+    tft.drawString("CCW/CW value   BRK save   3s Back", 4, 222, 2);
   } else {
-    tft.drawString("CCW/CW waehlen   BRK OK   3s Zurueck", 4, 226, 1);
+    tft.drawString("CCW/CW select   BRK OK   3s Back", 4, 222, 2);
   }
 }
 
@@ -520,12 +521,12 @@ static void menuDrawChar() {
   tft.setTextDatum(TL_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextPadding(304);
-  tft.drawString(editBuf.length() ? editBuf : "(leer)", 8, 48, 2);
+  tft.drawString(editBuf.length() ? editBuf : "(empty)", 8, 48, 4);
   char shown[12];
   if (charIdx == MENU_CHAR_DEL) {
     strcpy(shown, "<DEL>");
   } else if (charIdx == MENU_CHAR_OK) {
-    strcpy(shown, "<FERTIG>");
+    strcpy(shown, "<DONE>");
   } else {
     shown[0] = MENU_CHARS[charIdx];
     shown[1] = '\0';
@@ -540,7 +541,7 @@ static void menuDrawChar() {
   tft.setTextPadding(80);
   char info[24];
   snprintf(info, sizeof(info), "%d / %d", editBuf.length(), editMax);
-  tft.drawString(info, 8, 190, 2);
+  tft.drawString(info, 8, 190, 4);
   tft.setTextPadding(0);
 }
 
@@ -925,7 +926,7 @@ static void menuSelectBt() {
 
 static void calToggleJog(int cmd) {
   if (calPhase != CAL_IDLE) {
-    calAbort("Kalib: Abbruch");
+    calAbort("Cal: aborted");
   }
   calJogCmd = (calJogCmd == cmd) ? 0 : cmd;
 }
@@ -960,7 +961,7 @@ static void menuSelectCal() {
       break;
     case 6:
       if (calPhase != CAL_IDLE) {
-        calAbort("Kalib: Abbruch");
+        calAbort("Cal: aborted");
       } else {
         calStartAuto();
       }
@@ -976,19 +977,19 @@ static void menuSelectCal() {
 
 static void menuSelectSys() {
   switch (menuSel) {
-    case 1:
+    case 2:
       debug = !debug;
       menuDrawRow(menuSel);
       break;
-    case 2:
+    case 3:
       tft.fillScreen(TFT_BLACK);
       tft.setTextDatum(MC_DATUM);
       tft.setTextColor(TFT_WHITE, TFT_BLACK);
-      tft.drawString("Neustart...", 160, 120, 4);
+      tft.drawString("Restarting...", 160, 120, 4);
       delay(200);
       ESP.restart();
       break;
-    case 3:
+    case 4:
       menuGoto(MP_SETUP);
       break;
   }
@@ -1083,11 +1084,11 @@ void menuRefreshLive() {
     return;
   }
   if (menuPage == MP_SYS) {
-    menuLabel(0, buf, sizeof(buf));
+    menuLabel(1, buf, sizeof(buf));
     if (strcmp(buf, lastLive0) != 0) {
       strncpy(lastLive0, buf, sizeof(lastLive0) - 1);
       lastLive0[sizeof(lastLive0) - 1] = '\0';
-      menuDrawRow(0);
+      menuDrawRow(1);
     }
   }
 }

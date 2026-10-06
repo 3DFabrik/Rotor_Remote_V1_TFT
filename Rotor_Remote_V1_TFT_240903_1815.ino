@@ -1,7 +1,7 @@
 //      CDE Rotor Control
 //      By Patric Elsen
 //      DF7ZZ
-//      Ver. 06.10.2026 14:45
+//      Ver. 06.10.2026 20:15
 
 // Kalman-Filter-Klasse definieren
 class KalmanFilter {
@@ -807,8 +807,8 @@ void PrintStoredSetup() {
 
 const char *linkModeLabel() {
   switch (linkMode) {
-    case LINK_WIFI: return "WLAN";
-    case LINK_BOTH: return "Beides";
+    case LINK_WIFI: return "Wi-Fi";
+    case LINK_BOTH: return "Both";
     default: return "Bluetooth";
   }
 }

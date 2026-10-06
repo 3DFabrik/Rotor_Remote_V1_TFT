@@ -20,14 +20,14 @@ bool linkWantsWifi() {
 }
 
 const char *wifiStateLabel() {
-  if (!wifiWanted && !linkWantsWifi()) return "aus";
+  if (!wifiWanted && !linkWantsWifi()) return "off";
   switch (WiFi.status()) {
-    case WL_CONNECTED: return "verbunden";
-    case WL_NO_SSID_AVAIL: return "SSID fehlt";
-    case WL_CONNECT_FAILED: return "Fehler";
-    case WL_CONNECTION_LOST: return "getrennt";
-    case WL_DISCONNECTED: return "getrennt";
-    default: return wifiSsid.length() ? "verbinden..." : "kein SSID";
+    case WL_CONNECTED: return "connected";
+    case WL_NO_SSID_AVAIL: return "no SSID";
+    case WL_CONNECT_FAILED: return "failed";
+    case WL_CONNECTION_LOST: return "lost";
+    case WL_DISCONNECTED: return "offline";
+    default: return wifiSsid.length() ? "connecting..." : "no SSID";
   }
 }
 
@@ -53,6 +53,37 @@ static void otaShowScreen(const char *msg) {
   tft.setTextDatum(TL_DATUM);
 }
 
+static String otaHtmlHead(const char *title, bool onUpdate) {
+  String h = "<!DOCTYPE html><html><head><meta charset='utf-8'>";
+  h += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
+  h += "<title>";
+  h += title;
+  h += "</title><style>";
+  h += "body{font-family:sans-serif;background:#111;color:#eee;margin:0}";
+  h += "header{background:#1a2332;padding:16px 20px;border-bottom:1px solid #345}";
+  h += "header h1{margin:0;font-size:22px;color:#6cf}";
+  h += ".ver{color:#9ab;margin-top:6px;font-size:14px}";
+  h += "nav{margin-top:14px}";
+  h += "nav a{color:#9ab;margin-right:18px;text-decoration:none}";
+  h += "nav a.on{color:#6cf;font-weight:bold}";
+  h += "main{padding:24px;max-width:520px}";
+  h += "p{line-height:1.45}";
+  h += ".note{color:#9ab}";
+  h += "input[type=file]{display:block;margin:16px 0}";
+  h += "input[type=submit]{font-size:16px;padding:10px 18px;background:#246;color:#fff;border:0;border-radius:6px}";
+  h += "</style></head><body><header><h1>RotorRemote</h1>";
+  h += "<div class='ver'>Firmware ";
+  h += FW_VERSION;
+  h += "</div><nav>";
+  if (onUpdate) {
+    h += "<a href='/'>Home</a><a class='on' href='/update'>Update</a>";
+  } else {
+    h += "<a class='on' href='/'>Home</a><a href='/update'>Update</a>";
+  }
+  h += "</nav></header><main>";
+  return h;
+}
+
 static void otaStop() {
   if (!otaReady) return;
   httpOta.stop();
@@ -66,48 +97,44 @@ static void otaBegin() {
   ArduinoOTA.setHostname(btName.length() ? btName.c_str() : "RotorRemote");
   ArduinoOTA.onStart([]() {
     stopAutorotate();
-    otaShowScreen("Firmware-Update...");
+    otaShowScreen("Updating...");
   });
   ArduinoOTA.onEnd([]() {
     otaShowScreen("Update OK");
   });
   ArduinoOTA.onError([](ota_error_t err) {
     (void)err;
-    otaShowScreen("Update Fehler");
+    otaShowScreen("Update failed");
   });
   ArduinoOTA.begin();
 
   httpOta.on("/", HTTP_GET, []() {
     String ip = WiFi.localIP().toString();
-    String html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>RotorRemote</title>";
-    html += "<style>body{font-family:sans-serif;background:#111;color:#eee;margin:24px}";
-    html += "a{color:#6cf}</style></head><body>";
-    html += "<h1>RotorRemote</h1>";
+    String html = otaHtmlHead("RotorRemote", false);
     html += "<p>rotctld: " + ip + ":" + String(rotPort) + "</p>";
-    html += "<p><a href='/update'>Firmware online flashen</a></p>";
-    html += "</body></html>";
+    html += "<p><a href='/update'>Flash firmware over Wi-Fi</a></p>";
+    html += "</main></body></html>";
     httpOta.send(200, "text/html", html);
   });
 
   httpOta.on("/update", HTTP_GET, []() {
-    String html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Firmware</title>";
-    html += "<style>body{font-family:sans-serif;background:#111;color:#eee;margin:24px}";
-    html += "input{font-size:16px;margin-top:12px}</style></head><body>";
-    html += "<h1>Firmware-Update</h1>";
-    html += "<p>App-Image (.ino.bin), nicht das USB-merged.bin.</p>";
+    String html = otaHtmlHead("Firmware update", true);
+    html += "<h2>Firmware update</h2>";
+    html += "<p>Use <strong>RotorRemote_ota.bin</strong> (app image). Do not upload the USB merged <strong>RotorRemote.bin</strong>.</p>";
     html += "<form method='POST' action='/update' enctype='multipart/form-data'>";
     html += "<input type='file' name='firmware' accept='.bin'>";
-    html += "<br><input type='submit' value='Flashen'></form>";
-    html += "</body></html>";
+    html += "<input type='submit' value='Flash'></form>";
+    html += "<p class='note'>The controller will restart after a successful update.</p>";
+    html += "</main></body></html>";
     httpOta.send(200, "text/html", html);
   });
 
   httpOta.on("/update", HTTP_POST, []() {
     httpOta.sendHeader("Connection", "close");
     if (Update.hasError()) {
-      httpOta.send(500, "text/plain", "Fehler beim Update");
+      httpOta.send(500, "text/plain", "Update failed");
     } else {
-      httpOta.send(200, "text/plain", "OK, starte neu");
+      httpOta.send(200, "text/plain", "OK, restarting");
       delay(400);
       ESP.restart();
     }
@@ -115,7 +142,7 @@ static void otaBegin() {
     HTTPUpload &upload = httpOta.upload();
     if (upload.status == UPLOAD_FILE_START) {
       stopAutorotate();
-      otaShowScreen("Firmware-Update...");
+      otaShowScreen("Updating...");
       if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
         Update.printError(Serial);
       }
@@ -127,7 +154,7 @@ static void otaBegin() {
       if (Update.end(true)) {
         otaShowScreen("Update OK");
       } else {
-        otaShowScreen("Update Fehler");
+        otaShowScreen("Update failed");
       }
     }
   });

@@ -1,0 +1,9 @@
+.theia/
+build/
+*.elf
+*.bin
+*.hex
+*.map
+.pio/
+.vscode/
+*.tmp

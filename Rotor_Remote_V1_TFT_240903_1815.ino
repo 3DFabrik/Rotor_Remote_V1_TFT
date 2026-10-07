@@ -19,9 +19,10 @@ public:
     K = 0;
   }
 
-  float update(float measurement) {
+  float update(float measurement, float factor) {
+    float r = R * factor;
     P = P + Q;
-    K = P / (P + R);
+    K = P / (P + r);
     X = X + K * (measurement - X);
     P = (1 - K) * P;
     return X;
@@ -44,13 +45,14 @@ float initialEstimate = 0;
 
 KalmanFilter kalman(processNoise, measurementNoise, estimationError, initialEstimate);
 
+static const float STAND_FILTER_FACTOR = 10.0f;
+
 // Librarys
 #include "BluetoothSerial.h"
 BluetoothSerial SerialBT;
 #include <Preferences.h>
 Preferences preferences;    // Objekt für die Verwendung des Preferences-Speichers
 #include <RunningMedian.h>  // Running median Filter for the sensor input
-RunningMedian samples = RunningMedian(51);
 #include <TFT_eSPI.h>  // Graphics and font library for ST7789 driver chip, be careful with updating as the fucking update will delete your pin-settings
 #include <SPI.h>
 #include <WiFi.h>
@@ -61,6 +63,18 @@ using fs::FS;
 #include <Update.h>
 #include <ctype.h>
 #include "RotorTypes.h"
+
+int medianSamples = 100;
+RunningMedian *azMedian = nullptr;
+
+void applyMedianSamples(int n) {
+  if (n < 3) n = 3;
+  if (n > 255) n = 255;
+  medianSamples = n;
+  if (azMedian && azMedian->getSize() == (uint8_t)n) return;
+  delete azMedian;
+  azMedian = new RunningMedian((uint8_t)n);
+}
 
 #define TFT_GREY 0x5AEB       // New colours....
 #define TFT_VDARKGREY 0x3186  // super dark grey
@@ -194,6 +208,7 @@ void menuResetHold();
 void menuRefreshLive();
 void calService();
 int calMotorCmd();
+bool calIsActive();
 void calStopAll();
 void drawMainScreen();
 void drawLinkStatus();
@@ -260,7 +275,15 @@ void loop() {  //***************************************************************
       calService();
       DriveRotator(calMotorCmd());
     }
-    glitchalarm();
+    if (b_turning) {
+      glitchalarm();
+    } else if (alarmOn || ledOn || glitchMsgUntil) {
+      alarmOn = false;
+      ledOn = false;
+      glitchMsgUntil = 0;
+      if (!msgStuck) ledcWrite(LEDPin, 0);
+      drawFooterAlert();
+    }
   }
 
   if (currentMillis - prevMillis >= interv) {  // 100ms timer for display and stuck detection
@@ -344,12 +367,16 @@ void processBluetoothInput() {
   }
 }
 
+static float standFilterFactor() {
+  return b_turning ? 1.0f : STAND_FILTER_FACTOR;
+}
+
 void CalcPosition() {
   dig_AZ = analogRead(pin_in_AZ);
-  samples.add(dig_AZ);
-  dig_AZ_m = samples.getMedian();
-  dig_AZ_f = kalman.update(dig_AZ_m);
-  if (abs(dig_AZ - dig_AZ_m) >= 300) alarmOn = true;
+  azMedian->add(dig_AZ);
+  dig_AZ_m = azMedian->getMedian();
+  dig_AZ_f = kalman.update(dig_AZ_m, standFilterFactor());
+  if (b_turning && abs(dig_AZ - dig_AZ_m) >= 300) alarmOn = true;
 
 
   // Berechnung des gefilterten Winkelwerts in Grad (float)
@@ -523,6 +550,19 @@ void ManualRotate() {
 }
 
 void DriveRotator(int command) {
+  if (command != 0 && !calIsActive() && (az_max_digit - az_min_digit) >= 400) {
+    bool atSoftEnd = false;
+    if (command == 2 && dig_AZ_m >= (float)az_max_digit - 30.0f) atSoftEnd = true;
+    if (command == 1 && dig_AZ_m <= (float)az_min_digit + 30.0f) atSoftEnd = true;
+    if (atSoftEnd) {
+      command = 0;
+      if (b_autorotate) {
+        b_autorotate = false;
+        rotCmd = 0;
+      }
+    }
+  }
+
   if (command_old != command) {
     command_old = command;
 
@@ -772,6 +812,8 @@ void GetStoredSetup() {
   az_min_digit = preferences.getInt("az_min_digit", 200);
   az_max_digit = preferences.getInt("az_max_digit", 3800);
   a_overshoot = preferences.getInt("a_overshoot", 3);
+  medianSamples = preferences.getInt("median_n", 100);
+  applyMedianSamples(medianSamples);
   btName = preferences.getString("name", "RotorRemote_2");
   linkMode = preferences.getInt("link_mode", LINK_BT);
   if (linkMode < LINK_BT || linkMode > LINK_BOTH) linkMode = LINK_BT;

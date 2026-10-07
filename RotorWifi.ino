@@ -3,6 +3,9 @@ WiFiClient rotClient;
 bool rotServerStarted = false;
 WebServer httpOta(80);
 static bool otaReady = false;
+static bool otaBusy = false;
+static bool otaWeb = false;
+static void otaQuiesceNetwork();
 
 static int wifiScanState = 0;  // 0 idle, 1 running, 2 done
 static int wifiScanN = 0;
@@ -96,7 +99,7 @@ static void otaBegin() {
 
   ArduinoOTA.setHostname(btName.length() ? btName.c_str() : "RotorRemote");
   ArduinoOTA.onStart([]() {
-    stopAutorotate();
+    otaQuiesceNetwork();
     otaShowScreen("Updating...");
   });
   ArduinoOTA.onEnd([]() {
@@ -124,7 +127,8 @@ static void otaBegin() {
     html += "<form method='POST' action='/update' enctype='multipart/form-data'>";
     html += "<input type='file' name='firmware' accept='.bin'>";
     html += "<input type='submit' value='Flash'></form>";
-    html += "<p class='note'>The controller will restart after a successful update.</p>";
+    html += "<p class='note'>rotctld and Bluetooth are disconnected when the upload starts. "
+            "The controller restarts after a successful update.</p>";
     html += "</main></body></html>";
     httpOta.send(200, "text/html", html);
   });
@@ -141,7 +145,8 @@ static void otaBegin() {
   }, []() {
     HTTPUpload &upload = httpOta.upload();
     if (upload.status == UPLOAD_FILE_START) {
-      stopAutorotate();
+      otaWeb = true;
+      otaQuiesceNetwork();
       otaShowScreen("Updating...");
       if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
         Update.printError(Serial);
@@ -173,6 +178,17 @@ void rotctlStopServer() {
   if (rotServerStarted) {
     rotServer.stop();
     rotServerStarted = false;
+  }
+}
+
+static void otaQuiesceNetwork() {
+  otaBusy = true;
+  stopAutorotate();
+  rotctlStopServer();
+  rotLineLen = 0;
+  if (serialBtOn) {
+    SerialBT.end();
+    serialBtOn = false;
   }
 }
 
@@ -404,13 +420,18 @@ void wifiService() {
   if (!wifiWanted) return;
 
   if (WiFi.status() == WL_CONNECTED) {
+    otaBegin();
+    if (otaBusy) {
+      if (!otaWeb) ArduinoOTA.handle();
+      httpOta.handleClient();
+      return;
+    }
     if (!rotServerStarted) {
       rotServer.begin(rotPort);
       rotServerStarted = true;
       rotLineLen = 0;
       if (debug) Serial.println("rotctld listening on " + WiFi.localIP().toString() + ":" + String(rotPort));
     }
-    otaBegin();
     ArduinoOTA.handle();
     httpOta.handleClient();
     if (rotServer.hasClient()) {

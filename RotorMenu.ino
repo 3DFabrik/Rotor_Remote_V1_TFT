@@ -1,6 +1,6 @@
 const int MENU_TOP = 36;
-const int MENU_ROW = 28;
-const int MENU_VIS = 6;
+const int MENU_ROW = 20;
+const int MENU_VIS = 9;
 
 const char MENU_CHARS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -_.,:;!?@#%&*+=/";
 const int MENU_CHAR_N = (int)sizeof(MENU_CHARS) - 1;
@@ -32,14 +32,10 @@ static char lastLive1[64] = "";
 static char lastCalStatus[48] = "";
 static char lastHeaderIp[24] = "";
 
-static const unsigned long CAL_ABORT_MS = 5000;
-static const unsigned long CAL_NEAR_MS = 1800;
 static const unsigned long CAL_BACK_MS = 4000;
-static const unsigned long CAL_STOP_MS = 900;
+static const unsigned long CAL_STALL_MS = 3000;
 static const unsigned long CAL_SPEED_MS = 250;
 static const float CAL_NOISE_BAND = 12.0f;       // Stand-Rauschen des Drahtpotis +-10
-static const float CAL_PROGRESS_DIGITS = 22.0f;
-static const float CAL_MIN_TRAVEL = 80.0f;
 static const int CAL_BACK_DIGITS = 28;
 
 static CalPhase calPhase = CAL_IDLE;
@@ -49,19 +45,20 @@ static float calStopRaw = 0;
 static float calEndRaw = 0;
 static float calPrevFilt = 0;
 static float calSpeed = 0;
-static float calBest = 0;
 static unsigned long calPhaseAt = 0;
-static unsigned long calSlowAt = 0;
 static unsigned long calSpeedAt = 0;
-static bool calSawMove = false;
+static unsigned long calStallAt = 0;
 static bool calCwDone = false;
 static bool calCcwDone = false;
-static bool calFirstSeek = false;
 static char calStatus[48] = "";
 
 int calMotorCmd() {
   if (calPhase != CAL_IDLE) return calPhaseCmd;
   return calJogCmd;
+}
+
+bool calIsActive() {
+  return calPhase != CAL_IDLE || calJogCmd != 0;
 }
 
 static void calSetStatus(const char *msg) {
@@ -84,7 +81,7 @@ void calStopAll() {
   calJogCmd = 0;
   calPhase = CAL_IDLE;
   calPhaseCmd = 0;
-  calSawMove = false;
+  calStallAt = 0;
   if (calStatus[0] && strncmp(calStatus, "Cal: done", 9) != 0 &&
       strncmp(calStatus, "Cal: abort", 10) != 0) {
     calSetStatus("");
@@ -114,11 +111,9 @@ static void calBeginPhase(CalPhase phase, int cmd, const char *msg) {
   calStopRaw = dig_AZ_m;
   calPrevFilt = dig_AZ_m;
   calSpeed = 0;
-  calBest = 0;
   calPhaseAt = millis();
-  calSlowAt = millis();
   calSpeedAt = millis();
-  calSawMove = false;
+  calStallAt = 0;
   calSetStatus(msg);
 }
 
@@ -146,14 +141,6 @@ static void calUpdateSpeed() {
   if (calSpeed < 8.0f) calSpeed = 0;
 }
 
-static bool calNearEnd(float stored) {
-  int span = abs(az_max_digit - az_min_digit);
-  if (span < 400) return false;
-  int eps = span / 12;
-  if (eps < 80) eps = 80;
-  return fabsf(dig_AZ_m - stored) <= (float)eps;
-}
-
 static void calStartBack(CalPhase backPhase) {
   calEndRaw = dig_AZ_m;
   calBeginPhase(backPhase, calCmdFor(backPhase), calMsgFor(backPhase));
@@ -176,14 +163,12 @@ static void calAfterBackOk() {
     return;
   }
   CalPhase next = calCwDone ? CAL_CCW_SEEK : CAL_CW_SEEK;
-  calFirstSeek = false;
   calBeginPhase(next, calCmdFor(next), calMsgFor(next));
 }
 
 static void calStartAuto() {
   calCwDone = false;
   calCcwDone = false;
-  calFirstSeek = true;
   int span = abs(az_max_digit - az_min_digit);
   bool startCcw = false;
   if (span >= 400) {
@@ -197,39 +182,18 @@ void calService() {
   calUpdateSpeed();
   if (calPhase == CAL_IDLE) return;
 
-  float pos = dig_AZ_m;
-  float traveled = fabsf(pos - calStopRaw);
+  float traveled = fabsf(dig_AZ_m - calStopRaw);
   unsigned long now = millis();
 
-  if (traveled >= calBest + CAL_PROGRESS_DIGITS) {
-    calBest = traveled;
-    calSawMove = true;
-    calSlowAt = now;
-  }
-
-  if (!calSawMove) {
-    unsigned long waitMs = CAL_ABORT_MS;
-    bool maybeAlreadyThere = false;
-    if (calPhase == CAL_CW_SEEK) {
-      maybeAlreadyThere = calFirstSeek && calNearEnd((float)az_max_digit);
-      if (maybeAlreadyThere) waitMs = CAL_NEAR_MS;
-    } else if (calPhase == CAL_CCW_SEEK) {
-      maybeAlreadyThere = calFirstSeek && calNearEnd((float)az_min_digit);
-      if (maybeAlreadyThere) waitMs = CAL_NEAR_MS;
-    }
-    if (now - calPhaseAt >= waitMs) {
-      if (maybeAlreadyThere) {
-        calStartBack(calPhase == CAL_CW_SEEK ? CAL_CW_BACK : CAL_CCW_BACK);
-      } else {
-        calAbort("Cal: aborted, no travel");
-      }
-      return;
-    }
-  }
-
   if (calPhase == CAL_CW_SEEK || calPhase == CAL_CCW_SEEK) {
-    if (calSawMove && calBest >= CAL_MIN_TRAVEL && (now - calSlowAt >= CAL_STOP_MS)) {
-      calStartBack(calPhase == CAL_CW_SEEK ? CAL_CW_BACK : CAL_CCW_BACK);
+    if (fabsf(v_turn) < degpersec) {
+      if (calStallAt == 0) calStallAt = now;
+      if (now - calStallAt >= CAL_STALL_MS) {
+        calSetStatus("Cal: endstop");
+        calStartBack(calPhase == CAL_CW_SEEK ? CAL_CW_BACK : CAL_CCW_BACK);
+      }
+    } else {
+      calStallAt = 0;
     }
     return;
   }
@@ -299,7 +263,9 @@ static const char *menuTitle() {
       if (octTarget == OCT_DNS) return "DNS";
       return "IP address";
     case MP_NUM:
-      return (numTarget == NUM_OVER) ? "Overshoot" : "rotctld port";
+      if (numTarget == NUM_OVER) return "Overshoot";
+      if (numTarget == NUM_MEDIAN) return "Median samples";
+      return "rotctld port";
     default: return "Setup";
   }
 }
@@ -317,7 +283,7 @@ int menuCount() {
       return wifiScanCount() + 2;
     case MP_BT: return 3;
     case MP_CAL: return 8;
-    case MP_SYS: return 5;
+    case MP_SYS: return 6;
     default: return 0;
   }
 }
@@ -428,9 +394,10 @@ static void menuLabel(int i, char *buf, size_t n) {
             snprintf(buf, n, "OTA: Wi-Fi needed");
           }
           break;
-        case 2: snprintf(buf, n, "Debug: %s", debug ? "On" : "Off"); break;
-        case 3: snprintf(buf, n, "Restart"); break;
-        case 4: snprintf(buf, n, "Back"); break;
+        case 2: snprintf(buf, n, "Median: %d", medianSamples); break;
+        case 3: snprintf(buf, n, "Debug: %s", debug ? "On" : "Off"); break;
+        case 4: snprintf(buf, n, "Restart"); break;
+        case 5: snprintf(buf, n, "Back"); break;
       }
       break;
     default:
@@ -447,7 +414,7 @@ static void menuEnsureVisible() {
   if (menuScroll < 0) menuScroll = 0;
 }
 
-static void menuDrawRow(int absIndex) {
+static void menuDrawRow(int absIndex, bool live = false) {
   int n = menuCount();
   int vis = absIndex - menuScroll;
   int y = MENU_TOP + vis * MENU_ROW;
@@ -463,11 +430,16 @@ static void menuDrawRow(int absIndex) {
     menuLabel(absIndex, buf, sizeof(buf));
   }
 
-  tft.fillRect(0, y, 320, MENU_ROW, bg);
   tft.setTextDatum(TL_DATUM);
-  tft.setTextPadding(0);
+  if (live) {
+    tft.setTextPadding(304);
+  } else {
+    tft.fillRect(0, y, 320, MENU_ROW, bg);
+    tft.setTextPadding(0);
+  }
   tft.setTextColor(fg, bg);
-  if (buf[0]) tft.drawString(buf, 8, y + 2, 4);
+  if (buf[0]) tft.drawString(buf, 8, y + 2, 2);
+  tft.setTextPadding(0);
 }
 
 static void menuDrawList() {
@@ -666,14 +638,20 @@ static void commitOctetEdit() {
 }
 
 static void commitNumEdit() {
+  MenuPage back = MP_WLAN;
   if (numTarget == NUM_PORT) {
     rotPort = numVal;
     preferences.putInt("rot_port", rotPort);
-  } else {
+  } else if (numTarget == NUM_OVER) {
     a_overshoot = numVal;
     preferences.putInt("a_overshoot", a_overshoot);
+    back = MP_CAL;
+  } else {
+    applyMedianSamples(numVal);
+    preferences.putInt("median_n", medianSamples);
+    back = MP_SYS;
   }
-  menuGoto(numTarget == NUM_PORT ? MP_WLAN : MP_CAL);
+  menuGoto(back);
 }
 
 void menuEnter() {
@@ -705,7 +683,9 @@ void menuOnBack() {
       menuGoto(MP_WLAN);
       break;
     case MP_NUM:
-      menuGoto(numTarget == NUM_OVER ? MP_CAL : MP_WLAN);
+      if (numTarget == NUM_OVER) menuGoto(MP_CAL);
+      else if (numTarget == NUM_MEDIAN) menuGoto(MP_SYS);
+      else menuGoto(MP_WLAN);
       break;
     default:
       menuLeave();
@@ -755,6 +735,7 @@ void menuOnLeft() {
     numRepeat++;
     if (numTarget == NUM_PORT && numRepeat > 20) step = 10;
     if (numTarget == NUM_PORT && numRepeat > 80) step = 100;
+    if (numTarget == NUM_MEDIAN && numRepeat > 15) step = 5;
     numVal -= step;
     if (numVal < numMin) numVal = numMin;
     menuDrawNum();
@@ -781,6 +762,7 @@ void menuOnRight() {
     numRepeat++;
     if (numTarget == NUM_PORT && numRepeat > 20) step = 10;
     if (numTarget == NUM_PORT && numRepeat > 80) step = 100;
+    if (numTarget == NUM_MEDIAN && numRepeat > 15) step = 5;
     numVal += step;
     if (numVal > numMax) numVal = numMax;
     menuDrawNum();
@@ -978,10 +960,13 @@ static void menuSelectCal() {
 static void menuSelectSys() {
   switch (menuSel) {
     case 2:
+      openNumEdit(NUM_MEDIAN, medianSamples, 3, 255);
+      break;
+    case 3:
       debug = !debug;
       menuDrawRow(menuSel);
       break;
-    case 3:
+    case 4:
       tft.fillScreen(TFT_BLACK);
       tft.setTextDatum(MC_DATUM);
       tft.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -989,7 +974,7 @@ static void menuSelectSys() {
       delay(200);
       ESP.restart();
       break;
-    case 4:
+    case 5:
       menuGoto(MP_SETUP);
       break;
   }
@@ -1048,7 +1033,7 @@ void menuRefreshLive() {
     if (strcmp(buf, lastLive0) != 0) {
       strncpy(lastLive0, buf, sizeof(lastLive0) - 1);
       lastLive0[sizeof(lastLive0) - 1] = '\0';
-      menuDrawRow(0);
+      menuDrawRow(0, true);
     }
     char state[32];
     snprintf(state, sizeof(state), "%d:%d:%d:%d", calJogCmd, (int)calPhase, az_min_digit, az_max_digit);

@@ -1,7 +1,7 @@
 #pragma once
 
 #ifndef FW_VERSION
-#define FW_VERSION "06.10.2026 20:15"
+#define FW_VERSION "07.10.2026 09:40"
 #endif
 
 enum MenuPage : uint8_t {
@@ -18,7 +18,7 @@ enum MenuPage : uint8_t {
 
 enum EditTarget : uint8_t { ED_SSID, ED_PASS, ED_BTNAME };
 enum OctTarget : uint8_t { OCT_LOCAL, OCT_GW, OCT_MASK, OCT_DNS };
-enum NumTarget : uint8_t { NUM_PORT, NUM_OVER };
+enum NumTarget : uint8_t { NUM_PORT, NUM_OVER, NUM_MEDIAN };
 
 enum CalPhase : uint8_t {
   CAL_IDLE,

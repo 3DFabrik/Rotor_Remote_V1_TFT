@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (z.B. v1.2.3)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  VERSION: ${{ github.event.inputs.version || github.ref_name }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install arduino-cli
+        uses: arduino/setup-arduino-cli@v2
+        with:
+          version: '1.5.1'
+
+      - name: Install core
+        run: arduino-cli core install esp32:esp32@3.3.7
+
+      - name: Compile
+        run: |
+          arduino-cli compile \
+            --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs \
+            --build-property "compiler.cpp.extra_flags=-DFW_VERSION=\"${VERSION}\"" \
+            --libraries libraries \
+            --output-dir build/out .
+
+      - name: Collect binaries
+        run: |
+          mkdir -p firmware
+          pip install esptool==4.8.1
+          esptool.py --chip esp32 merge_bin -o firmware/RotorRemote.bin \
+            --flash_mode keep --flash_size 4MB \
+            0x1000 build/out/Rotor_Remote_V1_TFT.ino.bootloader.bin \
+            0x8000 build/out/Rotor_Remote_V1_TFT.ino.partitions.bin \
+            0x10000 build/out/Rotor_Remote_V1_TFT.ino.bin
+          cp build/out/Rotor_Remote_V1_TFT.ino.bin firmware/RotorRemote_ota.bin
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$VERSION" \
+            firmware/RotorRemote.bin firmware/RotorRemote_ota.bin \
+            --title "$VERSION" --generate-notes

@@ -16,7 +16,7 @@ Die Relaiskontakte sind die Trennstelle. Auf der Spulenseite liegen 5 V und Mass
 
 ## Schaltplan
 
-![Schaltplan: Controller am 5-V-Netzteil, Rotor nur über die Relaiskontakte](docs/schaltplan.svg)
+![Schaltplan: Controller am 5-V-Netzteil, Rotor nur über die Relaiskontakte](docs/schaltplan.png)
 
 | Von | Nach |
 | --- | --- |

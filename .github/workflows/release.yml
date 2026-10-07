@@ -44,7 +44,7 @@ jobs:
       - name: Collect binaries
         run: |
           pip install esptool==4.8.1
-          esptool.py --chip esp32 merge-bin -o firmware/RotorRemote.bin \
+          esptool.py --chip esp32 merge_bin -o firmware/RotorRemote.bin \
             --flash_mode keep --flash_size 4MB \
             0x1000 build/out/Rotor_Remote_V1_TFT.ino.bootloader.bin \
             0x8000 build/out/Rotor_Remote_V1_TFT.ino.partitions.bin \

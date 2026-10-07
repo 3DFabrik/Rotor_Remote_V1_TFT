@@ -1,7 +1,6 @@
 //      CDE Rotor Control
 //      By Patric Elsen
 //      DF7ZZ
-//      Ver. 06.10.2026 20:15
 
 // Kalman-Filter-Klasse definieren
 class KalmanFilter {
@@ -76,7 +75,6 @@ void applyMedianSamples(int n) {
   azMedian = new RunningMedian((uint8_t)n);
 }
 
-#define TFT_GREY 0x5AEB       // New colours....
 #define TFT_VDARKGREY 0x3186  // super dark grey
 int COLOR_BG = TFT_BLACK;
 
@@ -129,7 +127,7 @@ int pin_out_AUX_relais = 32;
 //PWM Pins for LED output
 const int LEDPin = 33;      // der Output Pin der Alarm-LED
 const int freq = 5000;      // Output PWM frequency
-const int resolution = 10;  // Resolution of the PWM output (0-255)
+const int resolution = 10;  // Resolution of the PWM output (0-1023)
 
 // Button variables set to true when button is pressed
 bool but_CCW = false;
@@ -139,7 +137,7 @@ bool but_CW = false;
 float dig_AZ = 0;               // Rohwert ADC (spiked)
 float dig_AZ_m = 0;             // Median, spike-bereinigt, schnell
 float dig_AZ_f = 0;             // Kalman auf dem Median, fuer Anzeige
-float azimut = 0;               // unfiltered azimut
+float azimut = 0;               // Kompasswinkel (Anzeige-Wert + 180°)
 float azimut_abs = 0;           // absolut azimuth (0-360°) as target for automatic rotor movement
 int azimut_tar = 0;             // azimut target as requested via serial port
 bool b_autorotate = false;      // Gets set whenever a rotate-command is received and reset when rotation is finished
@@ -155,9 +153,6 @@ int rotCmd = 0;  // 0 = nichts, 1 = CCW (gegen den Uhrzeigersinn), 2 = CW (im Uh
 
 // variables for serial comms
 String Azimuth = "";
-int Azimuth_tar = 0;
-String serial_in;
-String serial_out;
 
 // Timer 10ms
 unsigned long previousMillis = 0;
@@ -317,54 +312,36 @@ void loop() {  //***************************************************************
   wifiService();
 }
 
-void processSerialInput() {
-  static char buffer[15];  // Puffer für den Befehl
-  static int i = 0;        // Index für den Puffer
-
-  // Überprüfe, ob Daten über Serial empfangen werden
-  while (Serial.available() > 0) {
-    char c = Serial.read();
+void readCommandLine(Stream &s, char *buffer, int &i) {
+  while (s.available() > 0) {
+    char c = s.read();
 
     // Wenn ein CR-Zeichen empfangen wird, beende und verarbeite den Befehl
     if (c == '\r') {
       buffer[i] = '\0';  // Nullterminator am Ende hinzufügen
-      //Serial.println("Received serial buffer: " + String(buffer));  // Debug-Ausgabe
-      SerComm(buffer);  // Befehl verarbeiten
-      i = 0;            // Pufferindex zurücksetzen für das nächste Kommando
-      return;           // Verlasse die Funktion, um Mehrfachverarbeitung zu verhindern
+      SerComm(buffer);   // Befehl verarbeiten
+      i = 0;             // Pufferindex zurücksetzen für das nächste Kommando
+      return;            // Verlasse die Funktion, um Mehrfachverarbeitung zu verhindern
     }
 
     // Überprüfung auf Pufferüberlauf
-    if (i < sizeof(buffer) - 1) {
+    if (i < 14) {
       buffer[i++] = c;
     }
   }
 }
 
+void processSerialInput() {
+  static char buffer[15];
+  static int i = 0;
+  readCommandLine(Serial, buffer, i);
+}
+
 void processBluetoothInput() {
   if (!serialBtOn) return;
-
-  static char buffer[15];  // Puffer für den Befehl
-  static int i = 0;        // Index für den Puffer
-
-  // Überprüfe, ob Daten über SerialBT empfangen werden
-  while (SerialBT.available() > 0) {
-    char c = SerialBT.read();
-
-    // Wenn ein CR-Zeichen empfangen wird, beende und verarbeite den Befehl
-    if (c == '\r') {
-      buffer[i] = '\0';  // Nullterminator am Ende hinzufügen
-      //Serial.println("Received bluetooth buffer: " + String(buffer));  // Debug-Ausgabe
-      SerComm(buffer);  // Befehl verarbeiten
-      i = 0;            // Pufferindex zurücksetzen für das nächste Kommando
-      return;           // Verlasse die Funktion, um Mehrfachverarbeitung zu verhindern
-    }
-
-    // Überprüfung auf Pufferüberlauf
-    if (i < sizeof(buffer) - 1) {
-      buffer[i++] = c;
-    }
-  }
+  static char buffer[15];
+  static int i = 0;
+  readCommandLine(SerialBT, buffer, i);
 }
 
 static float standFilterFactor() {
@@ -541,10 +518,9 @@ void ManualRotate() {
     if ((but_CCW == 0) && (but_CW == 1)) { rot_cmd = 2; }
     DriveRotator(rot_cmd);
   } else {
-    if ((but_CCW == 0) && (but_BRK == 1) && (but_CW == 0) && (b_autorotate == true)) {
-      rot_cmd = 0;
+    if (but_CCW == 0 && but_BRK == 1 && but_CW == 0) {
+      DriveRotator(0);
       b_autorotate = false;
-      DriveRotator(rot_cmd);
     }
   }
 }
@@ -678,17 +654,12 @@ void SerComm(char *buffer) {
 
   if (debug) Serial.println("Received buffer: " + String(buffer));
 
-  int overshootValue = 11;
-  serial_in = "";
   Azimuth = "";
-  String glitches = "";
-  String filtervalue = "";
   bool B_properCommand = false;
 
   // looking for command "C" and reply the actual azimuth value
   if (strncmp(buffer, "C", 1) == 0) {
-    serial_out = "+ " + String(azimut, 1);
-    replyBoth(serial_out);
+    replyBoth("+ " + String(azimut, 1));
     return;
   }
 
@@ -703,7 +674,7 @@ void SerComm(char *buffer) {
 
   // New overshoot values detected <O>
   if (buffer[0] == 'O' && isdigit(buffer[1]) && buffer[2] == '\0') {
-    overshootValue = buffer[1] - '0';  // Konvertiere das Zeichen zu einer Zahl (0-9)
+    int overshootValue = buffer[1] - '0';  // Konvertiere das Zeichen zu einer Zahl (0-9)
     preferences.putInt("a_overshoot", overshootValue);
     Serial.println("Overshoot value stored, value = " + String(overshootValue) + "'");
     PrintStoredSetup();
@@ -726,12 +697,6 @@ void SerComm(char *buffer) {
     tft_update();
     applyAzimuthTarget(Azimuth.toInt());
     Serial.println("New Azimuth received: " + Azimuth + "deg - Abs: " + String(azimut_tar) + "deg");
-    return;
-  }
-
-  if (strncmp(buffer, "C", 1) == 0) {
-    serial_out = "+ " + String(azimut, 1);
-    replyBoth(serial_out);
     return;
   }
 
@@ -772,22 +737,22 @@ void SerComm(char *buffer) {
 
   // looking for  <?> - Print Help
   if (strncmp(buffer, "?", 1) == 0) {
-    Serial.println("**********************************************************************************************************");
-    Serial.println("List of possible commands:");
-    Serial.println("C    - Reports the current calculated rotator position in ° compass angle");
-    Serial.println("S    - Stops the rotation");
-    Serial.println("MXXX - Requests the controller to turn the rotator to XXX position in ° compass angle");
-    Serial.println("D    - Reports the current values of the unfiltered and filtered angle in raw digits");
-    Serial.println("L    - Stores the current raw angle as lowest reachable position of the rotator");
-    Serial.println("H    - Stores the current raw angle as highest reachable position of the rotator");
-    Serial.println("OX   - Stores the overshoot value at which the rotor stops rotating prior reaching the target, 3' default.");
-    Serial.println("V    - Reports all currently stored setup values in EEPROM");
-    Serial.println("**********************************************************************************************************");
-    Serial.println("");
+    replyBoth("**********************************************************************************************************");
+    replyBoth("List of possible commands:");
+    replyBoth("C    - Reports the current calculated rotator position in ° compass angle");
+    replyBoth("S    - Stops the rotation");
+    replyBoth("MXXX - Requests the controller to turn the rotator to XXX position in ° compass angle");
+    replyBoth("D    - Reports the current values of the unfiltered and filtered angle in raw digits");
+    replyBoth("L    - Stores the current raw angle as lowest reachable position of the rotator");
+    replyBoth("H    - Stores the current raw angle as highest reachable position of the rotator");
+    replyBoth("OX   - Stores the overshoot value at which the rotor stops rotating prior reaching the target, 3' default.");
+    replyBoth("V    - Reports all currently stored setup values in EEPROM");
+    replyBoth("**********************************************************************************************************");
+    replyBoth("");
     return;
   }
 
-  if (B_properCommand = false) Serial.println("Unknown command received - " + String(buffer) + " - Type '?' for help.");
+  if (!B_properCommand) Serial.println("Unknown command received - " + String(buffer) + " - Type '?' for help.");
 }
 
 void tft_update() {
@@ -831,20 +796,20 @@ void GetStoredSetup() {
 
 void PrintStoredSetup() {
   GetStoredSetup();
-  Serial.println("*********************************************************************************************************");
-  Serial.println("Stored setup values:");
-  Serial.println("Maximum position value: " + String(az_max_digit) + " digits");
-  Serial.println("Minimum position value: " + String(az_min_digit) + " digits");
-  Serial.println("Rotor overshoot value : " + String(a_overshoot) + "'");
-  Serial.println("Bluetooth Name        : " + btName);
-  Serial.println("Link mode             : " + String(linkModeLabel()));
-  Serial.println("WLAN SSID             : " + wifiSsid);
-  Serial.println("WLAN IP mode          : " + String(ipMode ? "static" : "DHCP"));
-  Serial.println("WLAN IP / GW / Mask   : " + ipLocal + " / " + ipGw + " / " + ipMask);
-  Serial.println("WLAN DNS              : " + ipDns);
-  Serial.println("rotctld port          : " + String(rotPort));
-  Serial.println("*********************************************************************************************************");
-  Serial.println("");
+  replyBoth("*********************************************************************************************************");
+  replyBoth("Stored setup values:");
+  replyBoth("Maximum position value: " + String(az_max_digit) + " digits");
+  replyBoth("Minimum position value: " + String(az_min_digit) + " digits");
+  replyBoth("Rotor overshoot value : " + String(a_overshoot) + "'");
+  replyBoth("Bluetooth Name        : " + btName);
+  replyBoth("Link mode             : " + String(linkModeLabel()));
+  replyBoth("WLAN SSID             : " + wifiSsid);
+  replyBoth("WLAN IP mode          : " + String(ipMode ? "static" : "DHCP"));
+  replyBoth("WLAN IP / GW / Mask   : " + ipLocal + " / " + ipGw + " / " + ipMask);
+  replyBoth("WLAN DNS              : " + ipDns);
+  replyBoth("rotctld port          : " + String(rotPort));
+  replyBoth("*********************************************************************************************************");
+  replyBoth("");
 }
 
 const char *linkModeLabel() {
@@ -1041,9 +1006,8 @@ void drawLinkStatus() {
   int x = 318;
   if (wifiOn) {
     uint16_t col = TFT_CYAN;
-    if (wifiOk) col = TFT_CYAN;
-    else if (st == WL_CONNECT_FAILED || st == WL_NO_SSID_AVAIL) col = TFT_ORANGE;
-    else col = TFT_YELLOW;
+    if (!wifiOk && (st == WL_CONNECT_FAILED || st == WL_NO_SSID_AVAIL)) col = TFT_ORANGE;
+    else if (!wifiOk) col = TFT_YELLOW;
     x -= 34;
     drawWifiIcon(x + 16, FOOT_Y + 20, wifiOk, bars, col);
   }

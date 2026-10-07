@@ -1,7 +1,7 @@
 #pragma once
 
 #ifndef FW_VERSION
-#define FW_VERSION "07.10.2026 09:40"
+#define FW_VERSION "07.10.2026 18:40"
 #endif
 
 enum MenuPage : uint8_t {

@@ -62,7 +62,13 @@ using fs::FS;
 #include <ArduinoOTA.h>
 #include <Update.h>
 #include <ctype.h>
+#include <time.h>
 #include "RotorTypes.h"
+
+void webLog(const char *src, const char *msg);
+bool otaIsBusy();
+extern int webJog;
+extern unsigned long otaWifiLostAt;
 
 int medianSamples = 100;
 RunningMedian *azMedian = nullptr;
@@ -260,7 +266,18 @@ void setup() {
 }
 
 void loop() {  //***************************************************************************************************************************
- 
+  if (otaIsBusy()) {
+    if (WiFi.status() != WL_CONNECTED) {
+      if (!otaWifiLostAt) otaWifiLostAt = millis();
+      else if (millis() - otaWifiLostAt > 8000) ESP.restart();
+    } else {
+      otaWifiLostAt = 0;
+    }
+    wifiService();
+    yield();
+    return;
+  }
+
   unsigned long currentMillis = millis();
 
   if (currentMillis - previousMillis >= interval) {  // 1ms/1KHz timer for std. work
@@ -305,6 +322,7 @@ void loop() {  //***************************************************************
           DriveRotator(0);
           msgStuck = true;
           Serial.println("Rotor stuck detection fired!");
+          webLog("rotor", "stuck");
           ledcWrite(LEDPin, 25);
           drawFooterAlert();
         }
@@ -537,8 +555,12 @@ void AutoRotate(int targetAzimuth) {
 void ManualRotate() {
   int rot_cmd = 0;  // 0-nothing, 1=CCW, 2=CW
   if (b_autorotate == false) {
-    if ((but_CCW == 1) && (but_CW == 0)) { rot_cmd = 1; }
-    if ((but_CCW == 0) && (but_CW == 1)) { rot_cmd = 2; }
+    if (but_CCW || but_CW) {
+      if ((but_CCW == 1) && (but_CW == 0)) { rot_cmd = 1; }
+      if ((but_CCW == 0) && (but_CW == 1)) { rot_cmd = 2; }
+    } else {
+      rot_cmd = webJog;
+    }
     DriveRotator(rot_cmd);
   } else {
     if ((but_CCW == 0) && (but_BRK == 1) && (but_CW == 0) && (b_autorotate == true)) {
@@ -676,6 +698,7 @@ void drawArrow(int x, int y, int length, int width, int angle, uint16_t color) {
 
 void SerComm(char *buffer) {
 
+  webLog("serial", buffer);
   if (debug) Serial.println("Received buffer: " + String(buffer));
 
   int overshootValue = 11;
@@ -790,19 +813,61 @@ void SerComm(char *buffer) {
   if (B_properCommand = false) Serial.println("Unknown command received - " + String(buffer) + " - Type '?' for help.");
 }
 
+static void drawFixedCell(TFT_eSprite &s, char c, int x, int cellW) {
+  if (c == ' ' || c == '\0') return;
+  int w = s.textWidth(String(c), 4);
+  s.drawString(String(c), x + (cellW - w) / 2, 0, 4);
+}
+
 void tft_update() {
   if (menuOpen) return;
   if (spr_angle.width() != 320 || spr_angle.height() != 25) {
     spr_angle.deleteSprite();
     spr_angle.createSprite(320, 25);
   }
-  spr_angle.setTextDatum(TL_DATUM);  // Textausrichtung TL (TopLeft)
+  spr_angle.setTextDatum(TL_DATUM);
+  spr_angle.setTextPadding(0);
   spr_angle.setTextColor(TFT_WHITE, COLOR_BG);
   spr_angle.fillScreen(TFT_BLACK);
-  String message = " Angle: " + String((int)azimut) + "'" + " - Speed: " + String((int)v_turn) + " ";
-  int str_length = tft.textWidth(message) * 4;  // Breite für Schriftgröße 1 berechnen und mit 4 multiplizieren
-  int x_start = 320 - str_length / 2;
-  spr_angle.drawString(message, x_start, 0, 4);
+
+  int digitW = 0;
+  for (char c = '0'; c <= '9'; c++) {
+    int w = spr_angle.textWidth(String(c), 4);
+    if (w > digitW) digitW = w;
+  }
+  int dotW = spr_angle.textWidth(".", 4);
+
+  float show = azimut;
+  while (show < 0) show += 360.0f;
+  while (show >= 360.0f) show -= 360.0f;
+  if (show >= 359.95f) show = 0;
+  char angleTxt[8];
+  snprintf(angleTxt, sizeof(angleTxt), "%5.1f", show);
+
+  int speed = (int)v_turn;
+  if (speed < 0) speed = 0;
+  if (speed > 999) speed = 999;
+  char speedTxt[8];
+  snprintf(speedTxt, sizeof(speedTxt), "%3d", speed);
+
+  int x = 2;
+  spr_angle.drawString("Angle", x, 6, 2);
+  x += spr_angle.textWidth("Angle", 2) + 4;
+  for (int i = 0; angleTxt[i]; i++) {
+    char c = angleTxt[i];
+    int cell = (c == '.') ? dotW : digitW;
+    if (c == '.') spr_angle.drawString(".", x, 0, 4);
+    else drawFixedCell(spr_angle, c, x, cell);
+    x += cell + 1;
+  }
+  x += 8;
+  spr_angle.drawString("Speed", x, 6, 2);
+  x += spr_angle.textWidth("Speed", 2) + 4;
+  for (int i = 0; speedTxt[i]; i++) {
+    drawFixedCell(spr_angle, speedTxt[i], x, digitW);
+    x += digitW + 1;
+  }
+
   spr_angle.pushSprite(0, 180);
   drawAngleScale(azimut);
   drawLinkStatus();

@@ -39,6 +39,7 @@ jobs:
 
       - name: Collect binaries
         run: |
+          mkdir -p firmware
           pip install esptool==4.8.1
           esptool.py --chip esp32 merge_bin -o firmware/RotorRemote.bin \
             --flash_mode keep --flash_size 4MB \

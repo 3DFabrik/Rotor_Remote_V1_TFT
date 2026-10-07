@@ -5,6 +5,11 @@ WebServer httpOta(80);
 static bool otaReady = false;
 static bool otaBusy = false;
 static bool otaWeb = false;
+static bool otaBeginOk = false;
+static bool otaOk = false;
+static bool otaUploadStarted = false;
+unsigned long otaWifiLostAt = 0;
+static String otaErr;
 static void otaQuiesceNetwork();
 
 static int wifiScanState = 0;  // 0 idle, 1 running, 2 done
@@ -13,6 +18,39 @@ static bool wifiScanDirty = false;
 
 static char rotLine[96];
 static int rotLineLen = 0;
+
+static const int WEB_LOG_N = 16;
+static const int WEB_LOG_W = 96;
+static char webLogLines[WEB_LOG_N][WEB_LOG_W];
+static uint8_t webLogHead = 0;
+static uint8_t webLogCount = 0;
+static bool ntpStarted = false;
+
+int webJog = 0;
+unsigned long webJogAt = 0;
+
+void webLog(const char *src, const char *msg) {
+  if (!src) src = "";
+  if (!msg) msg = "";
+  char stamp[24] = "--";
+  time_t now = time(nullptr);
+  if (now > 1700000000) {
+    struct tm tmNow;
+    localtime_r(&now, &tmNow);
+    strftime(stamp, sizeof(stamp), "%d.%m.%Y %H:%M:%S", &tmNow);
+  }
+  char *d = webLogLines[webLogHead];
+  snprintf(d, WEB_LOG_W, "%s %s %s", stamp, src, msg);
+  webLogHead = (webLogHead + 1) % WEB_LOG_N;
+  if (webLogCount < WEB_LOG_N) webLogCount++;
+}
+
+static void webJogExpire() {
+  if (webJog != 0 && (millis() - webJogAt > 500)) {
+    webJog = 0;
+    webLog("web", "stop");
+  }
+}
 
 bool linkWantsBt() {
   return linkMode == LINK_BT || linkMode == LINK_BOTH;
@@ -56,6 +94,28 @@ static void otaShowScreen(const char *msg) {
   tft.setTextDatum(TL_DATUM);
 }
 
+static void otaGiveUp(const char *msg) {
+  static bool once = false;
+  if (once) return;
+  once = true;
+  Update.abort();
+  otaShowScreen(msg);
+  delay(1200);
+  ESP.restart();
+}
+
+static void otaFailScreen(const String &err) {
+  otaShowScreen("Update failed");
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString(err, 160, 170, 2);
+  tft.setTextDatum(TL_DATUM);
+}
+
+bool otaIsBusy() {
+  return otaBusy;
+}
+
 static String otaHtmlHead(const char *title, bool onUpdate) {
   String h = "<!DOCTYPE html><html><head><meta charset='utf-8'>";
   h += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
@@ -69,9 +129,18 @@ static String otaHtmlHead(const char *title, bool onUpdate) {
   h += "nav{margin-top:14px}";
   h += "nav a{color:#9ab;margin-right:18px;text-decoration:none}";
   h += "nav a.on{color:#6cf;font-weight:bold}";
-  h += "main{padding:24px;max-width:520px}";
+  h += "main{padding:24px;max-width:640px}";
   h += "p{line-height:1.45}";
   h += ".note{color:#9ab}";
+  h += ".grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0}";
+  h += ".card{background:#1a2332;border:1px solid #345;border-radius:8px;padding:14px}";
+  h += ".card h2{margin:0 0 8px;font-size:13px;color:#9ab;font-weight:normal}";
+  h += ".big{font-size:28px;color:#6cf}";
+  h += "select.log{width:100%;height:220px;background:#0d1117;color:#c9d1d9;border:1px solid #345;";
+  h += "font-family:ui-monospace,monospace;font-size:13px;padding:4px}";
+  h += ".jog{display:flex;gap:12px;margin:8px 0 18px}";
+  h += ".jog button{flex:1;font-size:18px;padding:14px;background:#246;color:#fff;border:0;border-radius:8px;touch-action:none}";
+  h += ".jog button:active{background:#3a7}";
   h += "input[type=file]{display:block;margin:16px 0}";
   h += "input[type=submit]{font-size:16px;padding:10px 18px;background:#246;color:#fff;border:0;border-radius:6px}";
   h += "</style></head><body><header><h1>RotorRemote</h1>";
@@ -107,7 +176,7 @@ static void otaBegin() {
   });
   ArduinoOTA.onError([](ota_error_t err) {
     (void)err;
-    otaShowScreen("Update failed");
+    otaGiveUp("Update failed");
   });
   ArduinoOTA.begin();
 
@@ -115,9 +184,94 @@ static void otaBegin() {
     String ip = WiFi.localIP().toString();
     String html = otaHtmlHead("RotorRemote", false);
     html += "<p>rotctld: " + ip + ":" + String(rotPort) + "</p>";
+    html += "<div class='grid'><div class='card'><h2>Azimuth</h2><div class='big' id='az'>-</div></div>";
+    html += "<div class='card'><h2>Motion</h2><div class='big' id='dir'>-</div></div></div>";
+    html += "<p class='note'>Target <span id='tgt'>-</span> &nbsp; Debug <span id='dbg'>-</span> &nbsp; Client <span id='cli'>-</span></p>";
+    html += "<div class='jog'><button id='ccw' type='button'>CCW</button><button id='cw' type='button'>CW</button></div>";
+    html += "<h2>rotctld / debug</h2>";
+    html += "<select class='log' id='log' size='12'></select>";
     html += "<p><a href='/update'>Flash firmware over Wi-Fi</a></p>";
+    html += "<script>";
+    html += "async function tick(){try{const r=await fetch('/status');if(!r.ok)return;const s=await r.json();";
+    html += "az.textContent=Number(s.az).toFixed(1)+'\\u00b0';";
+    html += "dir.textContent=s.dir;dir.style.color=s.turning?'#6f6':'#9ab';";
+    html += "tgt.textContent=s.target+'\\u00b0';dbg.textContent=s.debug?'on':'off';";
+    html += "cli.textContent=s.client?'connected':'none';";
+    html += "const el=log;el.innerHTML='';";
+    html += "(s.log||[]).forEach(t=>el.add(new Option(t)));";
+    html += "if(el.options.length)el.selectedIndex=el.options.length-1;";
+    html += "}catch(e){}}setInterval(tick,500);tick();";
+    html += "function bindJog(id,dir){const el=document.getElementById(id);let on=false,t=null;";
+    html += "const go=()=>fetch('/jog',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'dir='+dir});";
+    html += "el.addEventListener('pointerdown',e=>{e.preventDefault();el.setPointerCapture(e.pointerId);on=true;go();t=setInterval(go,200);});";
+    html += "const stop=()=>{if(!on)return;on=false;clearInterval(t);fetch('/jog',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'dir=stop'});};";
+    html += "el.addEventListener('pointerup',stop);el.addEventListener('pointercancel',stop);}";
+    html += "bindJog('ccw','ccw');bindJog('cw','cw');";
+    html += "</script>";
     html += "</main></body></html>";
     httpOta.send(200, "text/html", html);
+  });
+
+  httpOta.on("/status", HTTP_GET, []() {
+    if (otaBusy) {
+      httpOta.send(503, "text/plain", "busy");
+      return;
+    }
+    const char *dir = "Stopped";
+    bool ccw = digitalRead(pin_out_CCW_relais);
+    bool cw = digitalRead(pin_out_CW_relais);
+    if (ccw) dir = "Turning CCW";
+    else if (cw) dir = "Turning CW";
+    int compassTarget = azimut_tar + 180;
+    if (compassTarget >= 360) compassTarget -= 360;
+    String json = "{";
+    json += "\"az\":" + String(azimut, 1);
+    json += ",\"target\":" + String(compassTarget);
+    json += ",\"turning\":";
+    json += (ccw || cw) ? "true" : "false";
+    json += ",\"dir\":\"";
+    json += dir;
+    json += "\",\"debug\":";
+    json += debug ? "true" : "false";
+    json += ",\"client\":";
+    json += (rotClient && rotClient.connected()) ? "true" : "false";
+    json += ",\"log\":[";
+    int start = (webLogHead + WEB_LOG_N - webLogCount) % WEB_LOG_N;
+    for (int i = 0; i < webLogCount; i++) {
+      if (i) json += ",";
+      json += "\"";
+      const char *s = webLogLines[(start + i) % WEB_LOG_N];
+      for (; *s; s++) {
+        if (*s == '"' || *s == '\\') json += '\\';
+        if (*s >= 32) json += *s;
+      }
+      json += "\"";
+    }
+    json += "]}";
+    httpOta.send(200, "application/json", json);
+  });
+
+  httpOta.on("/jog", HTTP_POST, []() {
+    if (otaBusy || menuOpen || b_autorotate) {
+      if (webJog) {
+        webJog = 0;
+        webLog("web", "stop");
+      }
+      httpOta.send(409, "text/plain", "busy");
+      return;
+    }
+    String dir = httpOta.arg("dir");
+    int cmd = 0;
+    if (dir == "ccw") cmd = 1;
+    else if (dir == "cw") cmd = 2;
+    if (cmd != webJog) {
+      if (cmd == 1) webLog("web", "CCW");
+      else if (cmd == 2) webLog("web", "CW");
+      else webLog("web", "stop");
+    }
+    webJog = cmd;
+    webJogAt = millis();
+    httpOta.send(200, "text/plain", "ok");
   });
 
   httpOta.on("/update", HTTP_GET, []() {
@@ -127,7 +281,8 @@ static void otaBegin() {
     html += "<form method='POST' action='/update' enctype='multipart/form-data'>";
     html += "<input type='file' name='firmware' accept='.bin'>";
     html += "<input type='submit' value='Flash'></form>";
-    html += "<p class='note'>rotctld and Bluetooth are disconnected when the upload starts. "
+    html += "<p class='note'>Leave the home page before flashing: it polls the controller. "
+            "The display switches to Updating when the file transfer starts. "
             "The controller restarts after a successful update.</p>";
     html += "</main></body></html>";
     httpOta.send(200, "text/html", html);
@@ -135,32 +290,77 @@ static void otaBegin() {
 
   httpOta.on("/update", HTTP_POST, []() {
     httpOta.sendHeader("Connection", "close");
-    if (Update.hasError()) {
-      httpOta.send(500, "text/plain", "Update failed");
+    if (otaOk) {
+      otaShowScreen("Update OK");
+      httpOta.send(200, "text/html",
+        "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Restarting</title>"
+        "<style>body{font-family:sans-serif;background:#111;color:#eee;padding:24px}h1{color:#6cf}</style>"
+        "</head><body><h1>Neustart</h1><p>Die neue Firmware kommt gleich.</p>"
+        "<script>async function back(){try{const r=await fetch('/',{cache:'no-store'});"
+        "if(r.ok){location.replace('/');return;}}catch(e){}setTimeout(back,1000);}"
+        "setTimeout(back,2000);</script></body></html>");
+      delay(800);
+      ESP.restart();
     } else {
-      httpOta.send(200, "text/plain", "OK, restarting");
-      delay(400);
+      if (!otaErr.length() || otaErr == "No Error") otaErr = "aborted";
+      Update.abort();
+      otaFailScreen(otaErr);
+      httpOta.send(500, "text/plain", otaErr);
+      delay(2500);
       ESP.restart();
     }
   }, []() {
     HTTPUpload &upload = httpOta.upload();
     if (upload.status == UPLOAD_FILE_START) {
+      otaUploadStarted = true;
       otaWeb = true;
-      otaQuiesceNetwork();
+      otaBusy = true;
+      b_autorotate = false;
+      rotCmd = 0;
+      webJog = 0;
+      digitalWrite(pin_out_CCW_relais, LOW);
+      digitalWrite(pin_out_CW_relais, LOW);
+      digitalWrite(pin_out_BRK_relais, LOW);
+      rotctlStopServer();
+      rotLineLen = 0;
+      spr.deleteSprite();
+      spr_angle.deleteSprite();
       otaShowScreen("Updating...");
-      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      Update.abort();
+      WiFi.setSleep(false);
+      httpOta.client().setTimeout(60000);
+      otaBeginOk = Update.begin(UPDATE_SIZE_UNKNOWN);
+      if (!otaBeginOk) {
+        otaErr = Update.getError() ? Update.errorString() : ("start failed " + String(ESP.getMaxAllocHeap()));
         Update.printError(Serial);
+        Serial.println(otaErr);
       }
     } else if (upload.status == UPLOAD_FILE_WRITE) {
-      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
-        Update.printError(Serial);
+      if (otaBeginOk && !otaErr.length() && upload.currentSize) {
+        if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+          otaErr = Update.getError() ? Update.errorString() : "write failed";
+          otaBeginOk = false;
+          Update.printError(Serial);
+          Serial.println(otaErr);
+        }
       }
+      yield();
     } else if (upload.status == UPLOAD_FILE_END) {
-      if (Update.end(true)) {
-        otaShowScreen("Update OK");
-      } else {
-        otaShowScreen("Update failed");
+      if (otaBeginOk && !otaErr.length()) {
+        if (Update.end(true)) {
+          otaOk = true;
+        } else {
+          otaErr = Update.getError() ? Update.errorString() : "finalize failed";
+          otaErr += " ";
+          otaErr += String((unsigned long)upload.totalSize);
+          Update.printError(Serial);
+          Serial.println(otaErr);
+        }
+      } else if (!otaErr.length()) {
+        otaErr = "no image";
       }
+    } else if (upload.status == UPLOAD_FILE_ABORTED) {
+      if (!otaOk && !otaErr.length()) otaErr = "connection lost";
     }
   });
 
@@ -190,6 +390,7 @@ static void otaQuiesceNetwork() {
     SerialBT.end();
     serialBtOn = false;
   }
+  webLog("ota", "rotctld dropped");
 }
 
 void wifiStop() {
@@ -403,6 +604,7 @@ void rotctlRead() {
     if (c == '\r' || c == '\n') {
       if (rotLineLen > 0) {
         rotLine[rotLineLen] = '\0';
+        webLog("rotctl", rotLine);
         rotctlHandle(rotLine);
         rotLineLen = 0;
       }
@@ -416,20 +618,31 @@ void rotctlRead() {
 
 void wifiService() {
   wifiPollScan();
+  webJogExpire();
 
   if (!wifiWanted) return;
 
   if (WiFi.status() == WL_CONNECTED) {
+    if (!ntpStarted) {
+      configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org");
+      ntpStarted = true;
+    }
     otaBegin();
     if (otaBusy) {
       if (!otaWeb) ArduinoOTA.handle();
       httpOta.handleClient();
+      if (otaUploadStarted && !otaOk && otaErr.length()) {
+        otaFailScreen(otaErr);
+        delay(2000);
+        ESP.restart();
+      }
       return;
     }
     if (!rotServerStarted) {
       rotServer.begin(rotPort);
       rotServerStarted = true;
       rotLineLen = 0;
+      webLog("wifi", "rotctld listening");
       if (debug) Serial.println("rotctld listening on " + WiFi.localIP().toString() + ":" + String(rotPort));
     }
     ArduinoOTA.handle();
@@ -442,12 +655,19 @@ void wifiService() {
       rotClient = incoming;
       rotClient.setNoDelay(true);
       rotLineLen = 0;
+      webLog("rotctl", "client connected");
       if (debug) Serial.println("rotctld client connected");
     }
+    static bool rotHadClient = false;
     if (rotClient && rotClient.connected()) {
+      rotHadClient = true;
       rotctlRead();
+    } else if (rotHadClient) {
+      rotHadClient = false;
+      webLog("rotctl", "client gone");
+      rotClient.stop();
     }
-  } else if (rotServerStarted || otaReady) {
+  } else if (!otaBusy && (rotServerStarted || otaReady)) {
     otaStop();
     rotctlStopServer();
   }

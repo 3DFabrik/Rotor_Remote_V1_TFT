@@ -111,9 +111,9 @@ Dieselben Kurzbefehle gehen an USB-Serial mit 115200 Baud und an Bluetooth. Die 
 
 ## Update über WLAN
 
-Im Browser `http://<ip>/` öffnen und **Update** wählen. Hochgeladen wird `firmware/RotorRemote_ota.bin`. Die Datei `RotorRemote.bin` ist das USB-Abbild.
+Im Browser `http://<ip>/` zeigt die Startseite den aktuellen Winkel, die Fahrtrichtung, Taster für CCW und CW und eine Liste der letzten Befehle mit Datum und Uhrzeit. **Update** startet das Firmware-Update. Nach dem Neustart öffnet sich die Startseite wieder und zeigt die neue Firmware-Version. Hochgeladen wird `firmware/RotorRemote_ota.bin`. Die Datei `RotorRemote.bin` ist das USB-Abbild.
 
-Sobald der Upload oder ArduinoOTA startet, trennt der Controller rotctld und Bluetooth. Bis zum Neustart nimmt er keine neuen Clients dieser Art an.
+Die Update-Seite lässt den Controller in Ruhe, bis die Datei gesendet wird. Dann zeigt das Display „Updating...“ und rotctld wird getrennt. Bricht der Upload ab, erscheint „Update failed“ mit dem Grund, und der Controller startet neu. Fällt das WLAN dabei weg, startet er nach ein paar Sekunden ebenfalls neu.
 
 Ein USB-Flash, falls er einmal nötig ist, nutzt den ESP32 Dev Module mit `PartitionScheme=min_spiffs` und 921600 Baud. Port und Board stehen in `sketch.yaml`.
 

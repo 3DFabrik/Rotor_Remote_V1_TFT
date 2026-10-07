@@ -32,7 +32,7 @@ Die Relaiskontakte sind die Trennstelle. Auf der Spulenseite liegen 5 V und Mass
 | GPIO 35 | Schleifer des Azimut-Potis, Enden an 3V3 und GND |
 | GPIO 33 | Alarm-LED über einen Vorwiderstand nach GND |
 
-Die Display-Pins stehen im ESP32-Block von `TFT_eSPI/User_Setup.h`. USB-Serial läuft mit 115200 Baud. Das ist die Kommandoschnittstelle. Geflasht wird mit 921600 Baud.
+Die Display-Pins stehen im ESP32-Block von `libraries/TFT_eSPI/User_Setup.h`. USB-Serial läuft mit 115200 Baud. Das ist die Kommandoschnittstelle. Geflasht wird mit 921600 Baud.
 
 AUX ist verdrahtet und als Ausgang gesetzt. Die Firmware schaltet ihn im normalen Betrieb nicht.
 
@@ -136,10 +136,10 @@ In beiden Fällen wird die Version beim Bau als `FW_VERSION` eingesetzt; der Que
 
 ## Bauen
 
-Arduino CLI mit Core `esp32:esp32` 3.3.7. Die Bibliotheken liegen unter `../libraries`, unter anderem TFT_eSPI und RunningMedian.
+Arduino CLI mit Core `esp32:esp32` 3.3.7. TFT_eSPI und RunningMedian liegen im Ordner `libraries`.
 
 ```text
-arduino-cli compile --libraries ../libraries --output-dir firmware .
+arduino-cli compile --libraries libraries --output-dir firmware .
 ```
 
 Die App-Datei daraus nach `firmware/RotorRemote_ota.bin` kopieren. Das ist die Datei für das Update im Browser.

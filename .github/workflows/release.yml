@@ -26,19 +26,15 @@ jobs:
         with:
           version: '1.5.1'
 
-      - name: Install core and libraries
-        run: |
-          arduino-cli core install esp32:esp32@3.3.7
-          arduino-cli lib install TFT_eSPI RunningMedian
-
-      - name: Apply display pin setup
-        run: cp firmware/User_Setup.h "$HOME/Arduino/libraries/TFT_eSPI/User_Setup.h"
+      - name: Install core
+        run: arduino-cli core install esp32:esp32@3.3.7
 
       - name: Compile
         run: |
           arduino-cli compile \
             --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs \
             --build-property "compiler.cpp.extra_flags=-DFW_VERSION=\"${VERSION}\"" \
+            --libraries libraries \
             --output-dir build/out .
 
       - name: Collect binaries

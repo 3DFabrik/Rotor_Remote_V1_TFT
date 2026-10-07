@@ -1,6 +1,8 @@
 # Rotor Remote
 
-Eine kleine Fernbedienung für einen CDE-Antennenrotor. Der ESP32 zeigt den Kompasswinkel auf einem Farbdisplay, drei Taster drehen von Hand, und hamlib spricht den Rotor über WLAN an. Dieselbe Steuerung gibt es über USB und Bluetooth.
+Ein Umbau für ein vorhandenes CDE-Steuergerät. Aus der Kiste kommt die alte Steuerung heraus. Drin bleiben das Netzteil für den Rotor und der Phasenkondensator. Die Steuerung übernimmt ein ESP32: er zeigt den Kompasswinkel auf einem Farbdisplay, drei Taster drehen von Hand, und hamlib spricht den Rotor über WLAN an. Dieselbe Steuerung gibt es über USB und Bluetooth.
+
+![Front des umgebauten CDE-Steuergeräts. Das Display ist an und zeigt Winkel und Geschwindigkeit.](Pictures/Front.png)
 
 Die Firmware-Version steht im Systemmenü. Im Quelltext heißt sie `FW_VERSION` in `RotorTypes.h`.
 

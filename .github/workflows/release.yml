@@ -39,7 +39,7 @@ jobs:
           arduino-cli compile \
             --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs \
             --build-property "compiler.cpp.extra_flags=-DFW_VERSION=\"${VERSION}\"" \
-            --output-dir build/out .
+            --output-dir build/out Rotor_Remote_V1_TFT_240903_1815.ino
 
       - name: Collect binaries
         run: |

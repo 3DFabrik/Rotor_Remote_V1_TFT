@@ -1,76 +1,78 @@
 # Rotor Remote
 
-ESP32-Fernbedienung für einen CDE-Antennenrotor. Das Display zeigt den Kompasswinkel, die Tasten drehen von Hand, und hamlib spricht den Rotor über WLAN als rotctld an. Dieselbe Schnittstelle gibt es über USB-Serial und Bluetooth.
+Eine kleine Fernbedienung für einen CDE-Antennenrotor. Der ESP32 zeigt den Kompasswinkel auf einem Farbdisplay, drei Taster drehen von Hand, und hamlib spricht den Rotor über WLAN an. Dieselbe Steuerung gibt es über USB und Bluetooth.
 
-Firmware-Version steht im Systemmenü (`FW_VERSION` in `RotorTypes.h`).
+Die Firmware-Version steht im Systemmenü. Im Quelltext heißt sie `FW_VERSION` in `RotorTypes.h`.
 
-## Hardware
+## Was dazugehört
 
-ESP32 Dev Module, 4 MB Flash, Partition `min_spiffs` (zwei App-Partitionen für OTA). Display: ST7789, 320×240, Landscape. Azimut kommt von einem Drahtpoti am ADC.
+- **ESP32** Dev Module, 4 MB Flash. Die Partition `min_spiffs` lässt zwei Programme nebeneinander liegen, damit ein Update über WLAN klappt.
+- **Eigenes 5-V-Netzteil** für den ESP. Damit bleibt der Controller galvanisch vom Rotor getrennt. Die Rotorspannung bleibt auf ihrer Seite.
+- **4-fach-Relaisplatine** mit Jumper für High- oder Low-Pegel. Den Jumper auf **High** stecken. Die Firmware schaltet eine Spule ein, indem sie den Pin auf High legt.
+- **TFT-Farbdisplay** ST7789, **320 × 240** Bildpunkte, quer eingebaut.
+- **Drahtpoti** für den Azimut, drei Taster und eine Alarm-LED.
 
-Tasten sind aktiv low und haben einen internen Pull-up. Relaisausgänge sind high-aktiv. Die Bremse zieht zuerst an, der Motor folgt nach 250 ms. Nach dem Stopp bleibt die Bremse noch 1 s angezogen.
+Die Relaiskontakte sind die Trennstelle. Auf der Spulenseite liegen 5 V und Masse des Controllers. Auf der Kontaktseite liegen nur die Rotorleitungen CCW, Bremse, CW und der freie AUX-Kontakt.
 
-### Pinout
+## Schaltplan
 
-| GPIO | Richtung | Funktion |
-| --- | --- | --- |
-| 35 | Eingang | Azimut-Poti, ADC |
-| 12 | Eingang | Taste CCW |
-| 13 | Eingang | Taste BRK |
-| 14 | Eingang | Taste CW |
-| 25 | Ausgang | Relais CCW |
-| 26 | Ausgang | Relais Bremse |
-| 27 | Ausgang | Relais CW |
-| 32 | Ausgang | Relais AUX, nur als Ausgang gesetzt |
-| 33 | PWM | Alarm-LED, 5 kHz |
-| 4 | SPI | TFT MOSI |
-| 18 | SPI | TFT SCLK |
-| 19 | SPI | TFT MISO |
-| 15 | Ausgang | TFT CS |
-| 2 | Ausgang | TFT DC |
-| 23 | Ausgang | TFT RST |
+![Schaltplan: Controller am 5-V-Netzteil, Rotor nur über die Relaiskontakte](docs/schaltplan.svg)
 
-Die Display-Pins stehen in `TFT_eSPI/User_Setup.h` (ESP32-Block). USB-Serial läuft mit 115200 Baud. Das ist die Kommandoschnittstelle, nicht die Flash-Geschwindigkeit.
+| Von | Nach |
+| --- | --- |
+| Netzteil +5 V | ESP32 VIN und VCC der Relaisplatine |
+| Netzteil GND | ESP32 GND, Relais-GND, Display, Taster, Poti, LED |
+| ESP32 3V3 | Display-VCC und ein Ende des Potis |
+| GPIO 25, 26, 27, 32 | IN1 bis IN4, also CCW, Bremse, CW, AUX |
+| Relaiskontakte K1 bis K4 | Rotor CCW, Bremse, CW, AUX |
+| GPIO 4, 18, 19, 15, 2, 23 | Display MOSI, SCLK, MISO, CS, DC, RST |
+| GPIO 12, 13, 14 | Taster CCW, BRK, CW, jeweils gegen GND |
+| GPIO 35 | Schleifer des Azimut-Potis, Enden an 3V3 und GND |
+| GPIO 33 | Alarm-LED über einen Vorwiderstand nach GND |
 
-## Bedienung am Gerät
+Die Display-Pins stehen im ESP32-Block von `TFT_eSPI/User_Setup.h`. USB-Serial läuft mit 115200 Baud. Das ist die Kommandoschnittstelle. Geflasht wird mit 921600 Baud.
 
-Auf der Hauptseite drehen **CCW** und **CW**, solange die Taste gehalten wird. **BRK** drei Sekunden öffnet das Menü. Im Menü wählen CCW/CW die Zeile, ein kurzer Druck auf BRK bestätigt, drei Sekunden gehen eine Ebene zurück.
+AUX ist verdrahtet und als Ausgang gesetzt. Die Firmware schaltet ihn im normalen Betrieb nicht.
 
-Das Menü:
+## Am Gerät
+
+Auf der Hauptseite drehen **CCW** und **CW**, solange der Taster gehalten wird. **BRK** drei Sekunden gedrückt öffnet das Menü. Im Menü wählen CCW und CW die Zeile. Ein kurzer Druck auf BRK bestätigt, drei Sekunden gehen eine Ebene zurück.
 
 - **Link** schaltet Bluetooth, WLAN oder beides.
-- **Wi-Fi** setzt SSID, Passwort, DHCP oder feste IP, Gateway, Maske, DNS und den rotctld-Port. Speichern verbindet neu.
+- **Wi-Fi** nimmt SSID, Passwort, DHCP oder eine feste Adresse, Gateway, Maske, DNS und den rotctld-Port. Speichern verbindet neu.
 - **Bluetooth** schaltet die Schnittstelle und den Gerätenamen.
-- **Calibration** zeigt Rohwert, Median und Geschwindigkeit, fährt von Hand an die Anschläge, speichert Max CCW und MAX CW, setzt den Overshoot und startet die Auto-Kalibrierung.
-- **System** zeigt Version und OTA-Adresse, stellt die Median-Länge ein (3 bis 255, Startwert 100), schaltet Debug und startet neu.
+- **Calibration** zeigt Rohwert, Median und Geschwindigkeit. Von hier aus fährt der Rotor von Hand an die Anschläge, speichert Max CCW und MAX CW, setzt den Overshoot und startet die Auto-Kalibrierung.
+- **System** zeigt Version und OTA-Adresse, stellt die Median-Länge ein, schaltet Debug und startet neu.
 
-Gespeichert wird in den Preferences unter dem Namen `RotorRemote`.
+Alles bleibt im Speicher unter dem Namen `RotorRemote`.
 
 ## Fahren und Anschläge
 
 CW erhöht die ADC-Digits, CCW senkt sie. `az_min_digit` ist Max CCW, `az_max_digit` ist MAX CW.
 
-Handfahrt und Autorotation bleiben 30 Digits vor diesen gespeicherten Enden stehen. Die Kalibrierung ist davon ausgenommen, sonst erreicht sie den mechanischen Anschlag nicht.
+Handfahrt und Autorotation bleiben 30 Digits vor diesen gespeicherten Enden stehen. Die Kalibrierung darf bis an den mechanischen Anschlag, sonst kann sie ihn nicht finden.
 
-Die Auto-Kalibrierung sucht einen Anschlag nur über die Geschwindigkeit: 3 s unter 3 °/s gelten als Stopp. Danach fährt sie 28 Digits zurück und speichert den Punkt. Zuerst wird das nähere gespeicherte Ende angefahren. Ein Start schon am Anschlag wird erkannt, weil die Geschwindigkeit nie über 3 °/s kommt.
+Die Auto-Kalibrierung erkennt den Anschlag an der Geschwindigkeit: 3 Sekunden unter 3 °/s gelten als Stopp. Danach fährt sie 28 Digits zurück und speichert den Punkt. Zuerst kommt das nähere gespeicherte Ende. Steht der Rotor schon am Anschlag, bleibt die Geschwindigkeit von Anfang an unter 3 °/s, und der Stopp gilt trotzdem.
 
-Der Overshoot (0 bis 9 °) lässt die Autorotation vor dem Ziel stehen.
+Die Bremse zieht zuerst an, der Motor folgt nach 250 ms. Nach dem Stopp bleibt die Bremse noch 1 Sekunde angezogen.
 
-## Winkel und Filter
+Der Overshoot von 0 bis 9 ° lässt die Autorotation etwas vor dem Ziel stehen.
+
+## Winkel
 
 Der ADC wird jede Millisekunde gelesen.
 
-1. Ein laufender Median wirft kurze Spikes des Drahtpotis weg. Die Länge ist im Systemmenü einstellbar und bleibt gespeichert. Eine gerade Länge mittelt die beiden mittleren Samples.
-2. Ein Kalman-Filter glättet daraus den angezeigten Winkel. Im Stand, solange die Bremse offen ist, ist dieser Filter zehnmal stärker. Während der Fahrt bleibt er leicht, damit das Ziel nicht zu spät gemeldet wird.
-3. Die Geschwindigkeitsanzeige ist ein Mittel über 1500 Samples, also etwa 1,5 s. Steht der Rotor, zeigt sie 0.
+1. Ein laufender Median nimmt kurze Spikes des Drahtpotis weg. Die Länge stellst du im Systemmenü ein, von 3 bis 255. Der Startwert ist 100, und er bleibt gespeichert. Bei einer geraden Länge mittelt das Programm die beiden mittleren Samples.
+2. Ein Kalman-Filter glättet daraus den angezeigten Winkel. Im Stand, solange die Bremse offen ist, ist dieser Filter zehnmal stärker. Während der Fahrt bleibt er leicht, damit das Ziel rechtzeitig gemeldet wird.
+3. Die Geschwindigkeit ist ein Mittel über etwa 1,5 Sekunden. Steht der Rotor, zeigt sie 0.
 
-Der Kompasswinkel auf dem Display und über rotctld ist der absolute Winkel plus 180 °, um 360 ° gefaltet. Kalibrierte Endpunkte und der 30-Digit-Abstand nutzen den Median, nicht den Kalman-Wert.
+Der Kompasswinkel auf dem Display und über rotctld ist der absolute Winkel plus 180 °, einmal um 360 ° herumgelegt. Die gespeicherten Enden und der 30-Digit-Abstand nutzen den Median.
 
-Ein Glitch (Rohwert und Median liegen 300 Digits auseinander) löst LED und Footer nur während der Fahrt aus. Im Stand passiert das nicht.
+Weichen Rohwert und Median während der Fahrt um 300 Digits oder mehr voneinander ab, leuchten LED und Footer. Im Stand bleibt diese Prüfung aus.
 
 ## rotctld
 
-Bei verbundenem WLAN hört der Controller auf TCP-Port 4533, sofern nichts anderes gespeichert ist. Ein neuer Client ersetzt den alten. Es gibt immer nur einen.
+Bei verbundenem WLAN hört der Controller auf TCP-Port 4533, sofern im Menü nichts anderes steht. Es ist immer nur ein Client verbunden. Ein neuer Client übernimmt die Verbindung.
 
 | Befehl | Wirkung |
 | --- | --- |
@@ -81,7 +83,7 @@ Bei verbundenem WLAN hört der Controller auf TCP-Port 4533, sofern nichts ander
 | `dump_state` | Azimut 0–360, Elevation 0–180 |
 | `_` oder `get_info` | `RotorRemote` |
 
-Ein Winkeltest vom PC steht in `tools/rotor_angle_test.py`. Er fährt ein Stück, wartet bis der Rotor steht und gibt den Fehler aus:
+`tools/rotor_angle_test.py` fährt den Rotor ein Stück, wartet bis er steht und gibt den Winkelfehler aus.
 
 ```text
 py -3 tools\rotor_angle_test.py --host 192.168.1.77 --step 40
@@ -90,7 +92,7 @@ py -3 tools\rotor_angle_test.py --targets 0,90,180,270
 
 ## USB und Bluetooth
 
-Dieselben Kurzbefehle gehen an USB-Serial (115200) und an Bluetooth. Die Antwort kommt auf beiden Wegen zurück, außer wo nur Serial genannt ist.
+Dieselben Kurzbefehle gehen an USB-Serial mit 115200 Baud und an Bluetooth. Die Antwort kommt auf beiden Wegen zurück.
 
 | Befehl | Wirkung |
 | --- | --- |
@@ -101,24 +103,24 @@ Dieselben Kurzbefehle gehen an USB-Serial (115200) und an Bluetooth. Die Antwort
 | `L` | Speichert die aktuelle Position als Minimum |
 | `H` | Speichert die aktuelle Position als Maximum |
 | `Ox` | Overshoot 0–9 |
-| `Nname` | Bluetooth-Name, max. 15 Zeichen |
+| `Nname` | Bluetooth-Name, höchstens 15 Zeichen |
 | `V` | Gespeicherte Werte |
 | `?` | Hilfe |
 
-## WLAN-Update
+## Update über WLAN
 
-Im Browser `http://<ip>/` und dann **Update**. Hochladen nur `firmware/RotorRemote_ota.bin`. Die 4-MB-Datei `RotorRemote.bin` ist das USB-Image und bricht im Browser ab.
+Im Browser `http://<ip>/` öffnen und **Update** wählen. Hochladen bitte `firmware/RotorRemote_ota.bin`. Die große Datei `RotorRemote.bin` ist das USB-Abbild.
 
-Sobald der Upload oder ArduinoOTA startet, werden rotctld und Bluetooth getrennt. Bis zum Neustart nimmt der Controller keine neuen Clients dieser Art an.
+Sobald der Upload oder ArduinoOTA startet, legt der Controller rotctld und Bluetooth beiseite. Bis zum Neustart nimmt er keine neuen Clients dieser Art an.
 
-Ein USB-Flash, falls nötig, nutzt den ESP32 Dev Module mit `PartitionScheme=min_spiffs` und 921600 Baud. Port und Board stehen in `sketch.yaml`.
+Ein USB-Flash, falls er einmal nötig ist, nutzt den ESP32 Dev Module mit `PartitionScheme=min_spiffs` und 921600 Baud. Port und Board stehen in `sketch.yaml`.
 
 ## Bauen
 
-Arduino CLI, Core `esp32:esp32` 3.3.7. Bibliotheken liegen unter `../libraries`, unter anderem TFT_eSPI und RunningMedian.
+Arduino CLI mit Core `esp32:esp32` 3.3.7. Die Bibliotheken liegen unter `../libraries`, unter anderem TFT_eSPI und RunningMedian.
 
 ```text
 arduino-cli compile --libraries ../libraries --output-dir firmware .
 ```
 
-Die App-Datei daraus nach `firmware/RotorRemote_ota.bin` kopieren. Das ist die Datei für das WLAN-Update.
+Die App-Datei daraus nach `firmware/RotorRemote_ota.bin` kopieren. Das ist die Datei für das Update im Browser.

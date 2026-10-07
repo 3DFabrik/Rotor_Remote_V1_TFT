@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 820" font-family="Segoe UI, Arial, sans-serif">
+  <rect width="1100" height="820" fill="#f6f4ef"/>
+  <text x="32" y="38" font-size="22" font-weight="700" fill="#1c2430">Schaltplan Rotor Remote</text>
+  <text x="32" y="62" font-size="14" fill="#5c6775">Der Controller hat sein eigenes 5-V-Netzteil. Der Rotor hängt nur an den Relaiskontakten.</text>
+
+  <rect x="20" y="82" width="620" height="714" rx="16" fill="#e7f0ea" stroke="#8eae98"/>
+  <text x="36" y="108" font-size="13" font-weight="700" fill="#2d5a40">Controller, eigenes Netzteil</text>
+
+  <rect x="660" y="82" width="420" height="714" rx="16" fill="#f8efe4" stroke="#d2b48c"/>
+  <text x="676" y="108" font-size="13" font-weight="700" fill="#7a4e1e">Rotor, eigene Spannung</text>
+
+  <rect x="40" y="132" width="250" height="150" rx="10" fill="#fff" stroke="#2d5a40" stroke-width="1.6"/>
+  <text x="165" y="162" text-anchor="middle" font-size="16" font-weight="700" fill="#1c2430">5-V-Netzteil</text>
+  <text x="165" y="186" text-anchor="middle" font-size="13" fill="#5c6775">galvanisch getrennt</text>
+  <text x="165" y="206" text-anchor="middle" font-size="13" fill="#5c6775">vom Rotor</text>
+  <circle cx="92" cy="244" r="6" fill="#c0392b"/>
+  <text x="106" y="249" font-size="14" fill="#1c2430">+5 V</text>
+  <circle cx="190" cy="244" r="6" fill="#1c2430"/>
+  <text x="204" y="249" font-size="14" fill="#1c2430">GND</text>
+
+  <rect x="320" y="132" width="290" height="250" rx="10" fill="#fff" stroke="#2457a6" stroke-width="1.6"/>
+  <text x="465" y="162" text-anchor="middle" font-size="16" font-weight="700" fill="#2457a6">ESP32</text>
+  <text x="340" y="194" font-size="14" fill="#c0392b">VIN</text>
+  <text x="390" y="194" font-size="14" fill="#1c2430">+5 V vom Netzteil</text>
+  <text x="340" y="218" font-size="14" fill="#1c2430">GND</text>
+  <text x="390" y="218" font-size="14" fill="#1c2430">gemeinsame Masse</text>
+  <text x="340" y="242" font-size="14" fill="#1c2430">3V3</text>
+  <text x="390" y="242" font-size="14" fill="#1c2430">Display und Poti</text>
+  <text x="340" y="274" font-size="14" fill="#1c2430">25</text>
+  <text x="390" y="274" font-size="14" fill="#1c2430">Relais CCW</text>
+  <text x="340" y="298" font-size="14" fill="#1c2430">26</text>
+  <text x="390" y="298" font-size="14" fill="#1c2430">Relais Bremse</text>
+  <text x="340" y="322" font-size="14" fill="#1c2430">27</text>
+  <text x="390" y="322" font-size="14" fill="#1c2430">Relais CW</text>
+  <text x="340" y="346" font-size="14" fill="#1c2430">32</text>
+  <text x="390" y="346" font-size="14" fill="#1c2430">Relais AUX</text>
+
+  <line x1="98" y1="244" x2="98" y2="188" stroke="#c0392b" stroke-width="2.2"/>
+  <line x1="98" y1="188" x2="320" y2="188" stroke="#c0392b" stroke-width="2.2"/>
+  <line x1="196" y1="244" x2="196" y2="212" stroke="#1c2430" stroke-width="2.2"/>
+  <line x1="196" y1="212" x2="320" y2="212" stroke="#1c2430" stroke-width="2.2"/>
+
+  <rect x="40" y="404" width="250" height="168" rx="10" fill="#fff" stroke="#2457a6" stroke-width="1.6"/>
+  <text x="165" y="432" text-anchor="middle" font-size="15" font-weight="700" fill="#1c2430">TFT-Farbdisplay</text>
+  <text x="165" y="454" text-anchor="middle" font-size="14" fill="#2457a6">ST7789, 320 × 240</text>
+  <text x="56" y="484" font-size="13" fill="#1c2430">VCC an 3V3, GND an GND</text>
+  <text x="56" y="508" font-size="13" fill="#1c2430">MOSI 4, SCLK 18, MISO 19</text>
+  <text x="56" y="532" font-size="13" fill="#1c2430">CS 15, DC 2, RST 23</text>
+  <text x="56" y="556" font-size="12" fill="#5c6775">quer, Landscape</text>
+
+  <rect x="320" y="404" width="290" height="168" rx="10" fill="#fff" stroke="#2457a6" stroke-width="1.6"/>
+  <text x="340" y="432" font-size="15" font-weight="700" fill="#1c2430">Taster, Poti, LED</text>
+  <text x="340" y="460" font-size="13" fill="#1c2430">12 CCW, 13 BRK, 14 CW</text>
+  <text x="340" y="482" font-size="13" fill="#5c6775">Taster gegen GND, intern High</text>
+  <text x="340" y="510" font-size="13" fill="#1c2430">35 Schleifer Azimut-Poti</text>
+  <text x="340" y="532" font-size="13" fill="#5c6775">Poti-Enden an 3V3 und GND</text>
+  <text x="340" y="556" font-size="13" fill="#1c2430">33 Alarm-LED, Vorwiderstand</text>
+
+  <rect x="40" y="596" width="570" height="176" rx="10" fill="#fff" stroke="#7a4e1e" stroke-width="1.6"/>
+  <text x="325" y="626" text-anchor="middle" font-size="15" font-weight="700" fill="#1c2430">4-fach-Relaisplatine, Spulenseite</text>
+  <rect x="60" y="646" width="150" height="96" rx="8" fill="#e7f0ea" stroke="#2d5a40"/>
+  <text x="135" y="676" text-anchor="middle" font-size="14" font-weight="700" fill="#2d5a40">Jumper</text>
+  <text x="135" y="700" text-anchor="middle" font-size="16" font-weight="700" fill="#1c2430">HIGH</text>
+  <text x="135" y="724" text-anchor="middle" font-size="12" fill="#5c6775">Low wäre die andere Lage</text>
+  <text x="230" y="674" font-size="14" fill="#1c2430">VCC an +5 V, GND an GND</text>
+  <text x="230" y="700" font-size="14" fill="#1c2430">IN1=25, IN2=26, IN3=27, IN4=32</text>
+  <text x="230" y="726" font-size="13" fill="#5c6775">High vom ESP zieht die Spule an</text>
+
+  <line x1="610" y1="668" x2="700" y2="668" stroke="#7a4e1e" stroke-width="1.8"/>
+  <line x1="610" y1="692" x2="700" y2="692" stroke="#7a4e1e" stroke-width="1.8"/>
+  <line x1="610" y1="716" x2="700" y2="716" stroke="#7a4e1e" stroke-width="1.8"/>
+  <line x1="610" y1="740" x2="700" y2="740" stroke="#7a4e1e" stroke-width="1.8"/>
+
+  <rect x="700" y="620" width="350" height="148" rx="10" fill="#fff" stroke="#7a4e1e" stroke-width="1.6"/>
+  <text x="875" y="648" text-anchor="middle" font-size="15" font-weight="700" fill="#7a4e1e">Kontakte zum CDE-Rotor</text>
+  <text x="724" y="678" font-size="14" fill="#1c2430">K1 CCW</text>
+  <text x="724" y="702" font-size="14" fill="#1c2430">K2 Bremse</text>
+  <text x="860" y="678" font-size="14" fill="#1c2430">K3 CW</text>
+  <text x="860" y="702" font-size="14" fill="#1c2430">K4 AUX, frei</text>
+  <text x="724" y="740" font-size="13" fill="#5c6775">potentialfrei, Rotorversorgung bleibt dort</text>
+
+  <rect x="700" y="150" width="350" height="250" rx="10" fill="#fff" stroke="#7a4e1e" stroke-width="1.6"/>
+  <text x="875" y="186" text-anchor="middle" font-size="16" font-weight="700" fill="#7a4e1e">CDE-Rotor</text>
+  <text x="724" y="224" font-size="15" fill="#1c2430">Leitung CCW</text>
+  <text x="724" y="252" font-size="15" fill="#1c2430">Leitung Bremse</text>
+  <text x="724" y="280" font-size="15" fill="#1c2430">Leitung CW</text>
+  <text x="724" y="308" font-size="15" fill="#1c2430">AUX, zurzeit unbenutzt</text>
+  <text x="724" y="352" font-size="13" fill="#5c6775">Motor und Bremse bleiben</text>
+  <text x="724" y="372" font-size="13" fill="#5c6775">an ihrer eigenen Spannung.</text>
+
+  <line x1="875" y1="400" x2="875" y2="620" stroke="#7a4e1e" stroke-width="1.6" stroke-dasharray="6 5"/>
+  <text x="888" y="520" font-size="13" fill="#7a4e1e">nur die</text>
+  <text x="888" y="538" font-size="13" fill="#7a4e1e">Kontakte</text>
+</svg>

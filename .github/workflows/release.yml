@@ -43,8 +43,13 @@ jobs:
 
       - name: Collect binaries
         run: |
-          cp build/out/*.factory.bin firmware/RotorRemote.bin
-          cp build/out/*.ino.bin firmware/RotorRemote_ota.bin
+          pip install esptool==4.8.1
+          esptool.py --chip esp32 merge-bin -o firmware/RotorRemote.bin \
+            --flash_mode keep --flash_size 4MB \
+            0x1000 build/out/Rotor_Remote_V1_TFT.ino.bootloader.bin \
+            0x8000 build/out/Rotor_Remote_V1_TFT.ino.partitions.bin \
+            0x10000 build/out/Rotor_Remote_V1_TFT.ino.bin
+          cp build/out/Rotor_Remote_V1_TFT.ino.bin firmware/RotorRemote_ota.bin
 
       - name: Create release
         env:

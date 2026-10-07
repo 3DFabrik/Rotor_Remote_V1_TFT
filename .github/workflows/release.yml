@@ -24,7 +24,7 @@ jobs:
       - name: Install arduino-cli
         uses: arduino/setup-arduino-cli@v2
         with:
-          version: '1.2.1'
+          version: 'latest'
 
       - name: Install core and libraries
         run: |

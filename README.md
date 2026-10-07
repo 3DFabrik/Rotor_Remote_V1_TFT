@@ -1,6 +1,6 @@
 # Rotor Remote
 
-Ein Umbau für ein vorhandenes CDE-Steuergerät. Aus der Kiste kommt die alte Steuerung heraus. Drin bleiben das Netzteil für den Rotor und der Phasenkondensator. Die Steuerung übernimmt ein ESP32: er zeigt den Kompasswinkel auf einem Farbdisplay, drei Taster drehen von Hand, und hamlib spricht den Rotor über WLAN an. Dieselbe Steuerung gibt es über USB und Bluetooth.
+Ein Umbau für ein vorhandenes CDE-Steuergerät. Die bisherige Steuerung wird aus dem Gehäuse entfernt. Es verbleiben das Netzteil für den Rotor und der Phasenkondensator. Die Steuerung übernimmt ein ESP32: er zeigt den Kompasswinkel auf einem Farbdisplay, drei Taster drehen von Hand, und hamlib spricht den Rotor über WLAN an. Dieselbe Steuerung gibt es über USB und Bluetooth.
 
 ![Front des umgebauten CDE-Steuergeräts. Das Display ist an und zeigt Winkel und Geschwindigkeit.](Pictures/Front.png)
 
@@ -8,9 +8,9 @@ Die Firmware-Version steht im Systemmenü. Im Quelltext heißt sie `FW_VERSION` 
 
 ## Was dazugehört
 
-- **ESP32** Dev Module, 4 MB Flash. Die Partition `min_spiffs` lässt zwei Programme nebeneinander liegen, damit ein Update über WLAN klappt.
-- **Eigenes 5-V-Netzteil** für den ESP. Damit bleibt der Controller galvanisch vom Rotor getrennt. Die Rotorspannung bleibt auf ihrer Seite.
-- **4-fach-Relaisplatine** mit Jumper für High- oder Low-Pegel. Den Jumper auf **High** stecken. Die Firmware schaltet eine Spule ein, indem sie den Pin auf High legt.
+- **ESP32** Dev Module, 4 MB Flash. Die Partition `min_spiffs` hält zwei Programme vor, damit ein Update über WLAN möglich ist.
+- **Eigenes 5-V-Netzteil** für den ESP. Damit bleibt der Controller galvanisch vom Rotor getrennt. Die Versorgung des Rotors bleibt davon unabhängig.
+- **4-fach-Relaisplatine** mit Jumper für High- oder Low-Pegel. Der Jumper steht auf **High**. Die Firmware schaltet eine Spule ein, indem sie den Pin auf High legt.
 - **TFT-Farbdisplay** ST7789, **320 × 240** Bildpunkte, quer eingebaut.
 - **Drahtpoti** für den Azimut, drei Taster und eine Alarm-LED.
 
@@ -64,7 +64,7 @@ Der Overshoot von 0 bis 9 ° lässt die Autorotation etwas vor dem Ziel stehen.
 
 Der ADC wird jede Millisekunde gelesen.
 
-1. Ein laufender Median nimmt kurze Spikes des Drahtpotis weg. Die Länge stellst du im Systemmenü ein, von 3 bis 255. Der Startwert ist 100, und er bleibt gespeichert. Bei einer geraden Länge mittelt das Programm die beiden mittleren Samples.
+1. Ein laufender Median nimmt kurze Spikes des Drahtpotis weg. Die Länge wird im Systemmenü eingestellt, von 3 bis 255. Der Startwert ist 100 und bleibt gespeichert. Bei einer geraden Länge mittelt das Programm die beiden mittleren Samples.
 2. Ein Kalman-Filter glättet daraus den angezeigten Winkel. Im Stand, solange die Bremse offen ist, ist dieser Filter zehnmal stärker. Während der Fahrt bleibt er leicht, damit das Ziel rechtzeitig gemeldet wird.
 3. Die Geschwindigkeit ist ein Mittel über etwa 1,5 Sekunden. Steht der Rotor, zeigt sie 0.
 
@@ -85,7 +85,7 @@ Bei verbundenem WLAN hört der Controller auf TCP-Port 4533, sofern im Menü nic
 | `dump_state` | Azimut 0–360, Elevation 0–180 |
 | `_` oder `get_info` | `RotorRemote` |
 
-`tools/rotor_angle_test.py` fährt den Rotor ein Stück, wartet bis er steht und gibt den Winkelfehler aus.
+`tools/rotor_angle_test.py` verfährt den Rotor um einen vorgegebenen Winkel, wartet bis er steht und gibt den Winkelfehler aus.
 
 ```text
 py -3 tools\rotor_angle_test.py --host 192.168.1.77 --step 40
@@ -111,9 +111,9 @@ Dieselben Kurzbefehle gehen an USB-Serial mit 115200 Baud und an Bluetooth. Die 
 
 ## Update über WLAN
 
-Im Browser `http://<ip>/` öffnen und **Update** wählen. Hochladen bitte `firmware/RotorRemote_ota.bin`. Die große Datei `RotorRemote.bin` ist das USB-Abbild.
+Im Browser `http://<ip>/` öffnen und **Update** wählen. Hochgeladen wird `firmware/RotorRemote_ota.bin`. Die Datei `RotorRemote.bin` ist das USB-Abbild.
 
-Sobald der Upload oder ArduinoOTA startet, legt der Controller rotctld und Bluetooth beiseite. Bis zum Neustart nimmt er keine neuen Clients dieser Art an.
+Sobald der Upload oder ArduinoOTA startet, trennt der Controller rotctld und Bluetooth. Bis zum Neustart nimmt er keine neuen Clients dieser Art an.
 
 Ein USB-Flash, falls er einmal nötig ist, nutzt den ESP32 Dev Module mit `PartitionScheme=min_spiffs` und 921600 Baud. Port und Board stehen in `sketch.yaml`.
 

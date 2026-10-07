@@ -117,6 +117,23 @@ Sobald der Upload oder ArduinoOTA startet, trennt der Controller rotctld und Blu
 
 Ein USB-Flash, falls er einmal nötig ist, nutzt den ESP32 Dev Module mit `PartitionScheme=min_spiffs` und 921600 Baud. Port und Board stehen in `sketch.yaml`.
 
+## Release erstellen
+
+Der Build läuft auf GitHub Actions und stellt die Firmware-Dateien als Release bereit. Zwei Wege:
+
+**Per Tag (empfohlen):**
+
+```text
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+Der Push des Tags startet die Pipeline. Sie baut die Firmware und erstellt ein Release `v1.2.3` mit beiden Dateien.
+
+**Manuell:** Auf GitHub den Tab **Actions** öffnen, links **Release** wählen, oben rechts **Run workflow** drücken und eine Version wie `v1.2.3` eingeben.
+
+In beiden Fällen wird die Version beim Bau als `FW_VERSION` eingesetzt; der Quelltext in `RotorTypes.h` wird dafür nicht geändert. Im Release ist `RotorRemote.bin` das USB-Abbild und `RotorRemote_ota.bin` die Datei für das Update im Browser.
+
 ## Bauen
 
 Arduino CLI mit Core `esp32:esp32` 3.3.7. Die Bibliotheken liegen unter `../libraries`, unter anderem TFT_eSPI und RunningMedian.

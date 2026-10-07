@@ -7,4 +7,3 @@ build/
 .pio/
 .vscode/
 *.tmp
-!firmware/*.bin

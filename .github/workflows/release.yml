@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (z.B. v1.2.3)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  VERSION: ${{ github.event.inputs.version || github.ref_name }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install arduino-cli
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Install core and libraries
+        run: |
+          arduino-cli core install esp32:esp32@3.3.7
+          arduino-cli lib install TFT_eSPI RunningMedian
+
+      - name: Apply display pin setup
+        run: cp firmware/User_Setup.h "$HOME/Arduino/libraries/TFT_eSPI/User_Setup.h"
+
+      - name: Compile
+        run: |
+          arduino-cli compile \
+            --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs \
+            --build-property "compiler.cpp.extra_flags=-DFW_VERSION=\"${VERSION}\"" \
+            --output-dir build/out .
+
+      - name: Collect binaries
+        run: |
+          cp build/out/*.factory.bin firmware/RotorRemote.bin
+          cp build/out/*.ino.bin firmware/RotorRemote_ota.bin
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$VERSION" \
+            firmware/RotorRemote.bin firmware/RotorRemote_ota.bin \
+            --title "$VERSION" --generate-notes

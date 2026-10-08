@@ -232,6 +232,7 @@ void calService();
 int calMotorCmd();
 bool calIsActive();
 void calStopAll();
+void calEmergencyStop();
 void drawMainScreen();
 void drawLinkStatus();
 void drawFooterAlert();
@@ -337,8 +338,12 @@ void loop() {  //***************************************************************
     processButtonEvents();
     CalcPosition();
     if (!menuOpen) {
-      AutoRotate(azimut_tar);
-      ManualRotate();
+      if (but_BRK) {
+        emergencyStop();  // BRK beats buttons, web, rotctld and automatic travel
+      } else {
+        AutoRotate(azimut_tar);
+        ManualRotate();
+      }
     } else {
       calService();
       DriveRotator(calMotorCmd());
@@ -368,6 +373,7 @@ void loop() {  //***************************************************************
         stucktime++;
         if ((stucktime / 10) >= stop_stucktime) {
           b_autorotate = false;
+          rotCmd = 0;
           DriveRotator(0);
           msgStuck = true;
           Serial.println("Rotor stuck detection fired!");
@@ -615,6 +621,15 @@ void AutoRotate(int targetAzimuth) {
     }
     DriveRotator(rotCmd);  // Führe den aktuellen Drehbefehl aus
   }
+}
+
+void emergencyStop() {
+  bool wasActive = b_autorotate || rotCmd || webJog || command_old;
+  b_autorotate = false;
+  rotCmd = 0;
+  webJog = 0;
+  DriveRotator(0);
+  if (wasActive) webLog("brk", "emergency stop");
 }
 
 void ManualRotate() {
@@ -1053,6 +1068,7 @@ void processButtonEvents() {
   static bool cwPrev = false;
   static unsigned long brkDownAt = 0;
   static bool brkLongFired = false;
+  static bool brkSwallow = false;  // this BRK press stopped a calibration drive, so it must not also select
   static unsigned long repeatAt = 0;
   static int repeatDir = 0;
   static unsigned long lastNav = 0;
@@ -1062,6 +1078,8 @@ void processButtonEvents() {
   if (but_BRK && !brkPrev) {
     brkDownAt = now;
     brkLongFired = false;
+    brkSwallow = menuOpen && calIsActive();
+    if (brkSwallow) calEmergencyStop();
   }
   if (but_BRK && !brkLongFired && (now - brkDownAt >= BRK_LONG_MS)) {
     brkLongFired = true;
@@ -1073,7 +1091,7 @@ void processButtonEvents() {
   }
   if (!but_BRK && brkPrev) {
     unsigned long held = now - brkDownAt;
-    if (!brkLongFired && held >= 30 && held < BRK_LONG_MS && menuOpen) {
+    if (!brkLongFired && held >= 30 && held < BRK_LONG_MS && menuOpen && !brkSwallow) {
       menuOnSelect();
     }
   }

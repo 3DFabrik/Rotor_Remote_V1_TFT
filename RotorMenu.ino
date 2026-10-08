@@ -124,6 +124,10 @@ static void calAbort(const char *msg) {
   calSetStatus(msg);
 }
 
+void calEmergencyStop() {
+  calAbort("Cal: stopped");
+}
+
 static void calUpdateSpeed() {
   unsigned long now = millis();
   if (calSpeedAt == 0) {

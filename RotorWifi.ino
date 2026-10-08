@@ -163,7 +163,8 @@ bool otaIsBusy() {
   "select.log{width:100%;height:220px;background:#0d1117;color:#c9d1d9;border:1px solid #345;" \
   "font-family:ui-monospace,monospace;font-size:13px;padding:4px}" \
   ".jog{display:flex;gap:12px;margin:8px 0 18px}" \
-  ".jog button{flex:1;font-size:18px;padding:14px;background:#246;color:#fff;border:0;border-radius:8px;touch-action:none}" \
+  ".jog button{flex:1;font-size:18px;padding:14px;background:#246;color:#fff;border:0;border-radius:8px;touch-action:none;" \
+  "user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}" \
   ".jog button:active{background:#3a7}" \
   "input[type=file]{display:block;margin:16px 0}" \
   "input[type=submit]{font-size:16px;padding:10px 18px;background:#246;color:#fff;border:0;border-radius:6px}"
@@ -211,10 +212,15 @@ static const char HOME_PAGE[] PROGMEM =
   "if(el.options.length)el.selectedIndex=el.options.length-1;"
   "}}catch(e){}setTimeout(tick,800);}tick();"
   "function bindJog(id,dir){const el=document.getElementById(id);let on=false,t=null;"
-  "const go=()=>fetch('/jog',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'dir='+dir});"
-  "el.addEventListener('pointerdown',e=>{e.preventDefault();el.setPointerCapture(e.pointerId);on=true;go();t=setInterval(go,200);});"
-  "const stop=()=>{if(!on)return;on=false;clearInterval(t);fetch('/jog',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'dir=stop'});};"
-  "el.addEventListener('pointerup',stop);el.addEventListener('pointercancel',stop);}"
+  "const H={'Content-Type':'application/x-www-form-urlencoded'};"
+  "const stop=()=>{if(!on)return;on=false;clearInterval(t);fetch('/jog',{method:'POST',headers:H,body:'dir=stop'}).catch(()=>{});};"
+  "const send=b=>fetch('/jog',{method:'POST',headers:H,body:b}).then(r=>{if(r.status==409&&on){on=false;clearInterval(t);}}).catch(()=>{});"
+  "el.addEventListener('pointerdown',e=>{e.preventDefault();if(on)return;el.setPointerCapture(e.pointerId);on=true;"
+  "send('dir='+dir+'&start=1');t=setInterval(()=>send('dir='+dir),200);});"
+  "['pointerup','pointercancel','lostpointercapture','touchend','touchcancel','contextmenu','selectstart'].forEach(n=>"
+  "el.addEventListener(n,e=>{if(n=='contextmenu'||n=='selectstart')e.preventDefault();stop();}));"
+  "window.addEventListener('blur',stop);window.addEventListener('pagehide',stop);"
+  "document.addEventListener('visibilitychange',stop);}"
   "bindJog('ccw','ccw');bindJog('cw','cw');"
   "</script></main></body></html>";
 
@@ -348,7 +354,17 @@ static void otaBegin() {
 
   httpOta.on("/jog", HTTP_POST, []() {
     jogHits++;
-    if (otaBusy || menuOpen || b_autorotate) {
+    String dir = httpOta.arg("dir");
+    int cmd = 0;
+    if (dir == "ccw") cmd = 1;
+    else if (dir == "cw") cmd = 2;
+    if (cmd == 0) {  // stop is always accepted, from any client
+      if (webJog) webLog("web", "stop");
+      webJog = 0;
+      httpOta.send(200, "text/plain", "ok");
+      return;
+    }
+    if (otaBusy || menuOpen || b_autorotate || but_BRK) {
       if (webJog) {
         webJog = 0;
         webLog("web", "stop");
@@ -356,17 +372,22 @@ static void otaBegin() {
       httpOta.send(409, "text/plain", "busy");
       return;
     }
-    String dir = httpOta.arg("dir");
-    int cmd = 0;
-    if (dir == "ccw") cmd = 1;
-    else if (dir == "cw") cmd = 2;
-    if (cmd != webJog) {
-      if (cmd == 1) webLog("web", "CCW");
-      else if (cmd == 2) webLog("web", "CW");
-      else webLog("web", "stop");
+    if (httpOta.hasArg("start")) {  // only a fresh press may start; an opposite press while moving stops instead
+      if (webJog != 0 && webJog != cmd) {
+        webJog = 0;
+        webLog("web", "stop (conflict)");
+        httpOta.send(409, "text/plain", "busy");
+        return;
+      }
+      if (webJog != cmd) webLog("web", cmd == 1 ? "CCW" : "CW");
+      webJog = cmd;
+      webJogAt = millis();
+    } else if (webJog == cmd) {  // a heartbeat only keeps a running jog alive
+      webJogAt = millis();
+    } else {
+      httpOta.send(409, "text/plain", "stopped");
+      return;
     }
-    webJog = cmd;
-    webJogAt = millis();
     httpOta.send(200, "text/plain", "ok");
   });
 

@@ -1,8 +1,11 @@
 #pragma once
 
 #ifndef FW_VERSION
-#define FW_VERSION "07.10.2026 21:05"
+#define FW_VERSION "08.10.2026 07:10"
 #endif
+
+// Serial trace for network diagnosis, active only while Debug is on in the System menu.
+#define NETLOG(...) do { if (debug) { Serial.printf("[%lu] ", (unsigned long)millis()); Serial.printf(__VA_ARGS__); Serial.println(); } } while (0)
 
 enum MenuPage : uint8_t {
   MP_SETUP,

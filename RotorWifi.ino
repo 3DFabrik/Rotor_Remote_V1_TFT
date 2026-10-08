@@ -28,6 +28,8 @@ static bool ntpStarted = false;
 
 int webJog = 0;
 unsigned long webJogAt = 0;
+static uint32_t statusHits = 0;
+static uint32_t jogHits = 0;
 
 void webLog(const char *src, const char *msg) {
   if (!src) src = "";
@@ -41,6 +43,7 @@ void webLog(const char *src, const char *msg) {
   }
   char *d = webLogLines[webLogHead];
   snprintf(d, WEB_LOG_W, "%s %s %s", stamp, src, msg);
+  NETLOG("log %s", d);
   webLogHead = (webLogHead + 1) % WEB_LOG_N;
   if (webLogCount < WEB_LOG_N) webLogCount++;
 }
@@ -53,11 +56,11 @@ static void webJogExpire() {
 }
 
 bool linkWantsBt() {
-  return linkMode == LINK_BT || linkMode == LINK_BOTH;
+  return linkMode == LINK_BT;
 }
 
 bool linkWantsWifi() {
-  return linkMode == LINK_WIFI || linkMode == LINK_BOTH;
+  return linkMode == LINK_WIFI;
 }
 
 const char *wifiStateLabel() {
@@ -73,7 +76,7 @@ const char *wifiStateLabel() {
 }
 
 String wifiIpCurrent() {
-  if (WiFi.status() == WL_CONNECTED) return WiFi.localIP().toString();
+  if (linkWantsWifi() && WiFi.status() == WL_CONNECTED) return WiFi.localIP().toString();
   return ipMode ? ipLocal : String("-");
 }
 
@@ -116,45 +119,79 @@ bool otaIsBusy() {
   return otaBusy;
 }
 
-static String otaHtmlHead(const char *title, bool onUpdate) {
-  String h = "<!DOCTYPE html><html><head><meta charset='utf-8'>";
-  h += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
-  h += "<title>";
-  h += title;
-  h += "</title><style>";
-  h += "body{font-family:sans-serif;background:#111;color:#eee;margin:0}";
-  h += "header{background:#1a2332;padding:16px 20px;border-bottom:1px solid #345}";
-  h += "header h1{margin:0;font-size:22px;color:#6cf}";
-  h += ".ver{color:#9ab;margin-top:6px;font-size:14px}";
-  h += "nav{margin-top:14px}";
-  h += "nav a{color:#9ab;margin-right:18px;text-decoration:none}";
-  h += "nav a.on{color:#6cf;font-weight:bold}";
-  h += "main{padding:24px;max-width:640px}";
-  h += "p{line-height:1.45}";
-  h += ".note{color:#9ab}";
-  h += ".grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0}";
-  h += ".card{background:#1a2332;border:1px solid #345;border-radius:8px;padding:14px}";
-  h += ".card h2{margin:0 0 8px;font-size:13px;color:#9ab;font-weight:normal}";
-  h += ".big{font-size:28px;color:#6cf}";
-  h += "select.log{width:100%;height:220px;background:#0d1117;color:#c9d1d9;border:1px solid #345;";
-  h += "font-family:ui-monospace,monospace;font-size:13px;padding:4px}";
-  h += ".jog{display:flex;gap:12px;margin:8px 0 18px}";
-  h += ".jog button{flex:1;font-size:18px;padding:14px;background:#246;color:#fff;border:0;border-radius:8px;touch-action:none}";
-  h += ".jog button:active{background:#3a7}";
-  h += "input[type=file]{display:block;margin:16px 0}";
-  h += "input[type=submit]{font-size:16px;padding:10px 18px;background:#246;color:#fff;border:0;border-radius:6px}";
-  h += "</style></head><body><header><h1>RotorRemote</h1>";
-  h += "<div class='ver'>Firmware ";
-  h += FW_VERSION;
-  h += "</div><nav>";
-  if (onUpdate) {
-    h += "<a href='/'>Home</a><a class='on' href='/update'>Update</a>";
-  } else {
-    h += "<a class='on' href='/'>Home</a><a href='/update'>Update</a>";
-  }
-  h += "</nav></header><main>";
-  return h;
-}
+#define PAGE_CSS \
+  "body{font-family:sans-serif;background:#111;color:#eee;margin:0}" \
+  "header{background:#1a2332;padding:16px 20px;border-bottom:1px solid #345}" \
+  "header h1{margin:0;font-size:22px;color:#6cf}" \
+  ".ver{color:#9ab;margin-top:6px;font-size:14px}" \
+  "nav{margin-top:14px}" \
+  "nav a{color:#9ab;margin-right:18px;text-decoration:none}" \
+  "nav a.on{color:#6cf;font-weight:bold}" \
+  "main{padding:24px;max-width:640px}" \
+  "p{line-height:1.45}" \
+  ".note{color:#9ab}" \
+  ".grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0}" \
+  ".card{background:#1a2332;border:1px solid #345;border-radius:8px;padding:14px}" \
+  ".card h2{margin:0 0 8px;font-size:13px;color:#9ab;font-weight:normal}" \
+  ".big{font-size:28px;color:#6cf}" \
+  "select.log{width:100%;height:220px;background:#0d1117;color:#c9d1d9;border:1px solid #345;" \
+  "font-family:ui-monospace,monospace;font-size:13px;padding:4px}" \
+  ".jog{display:flex;gap:12px;margin:8px 0 18px}" \
+  ".jog button{flex:1;font-size:18px;padding:14px;background:#246;color:#fff;border:0;border-radius:8px;touch-action:none}" \
+  ".jog button:active{background:#3a7}" \
+  "input[type=file]{display:block;margin:16px 0}" \
+  "input[type=submit]{font-size:16px;padding:10px 18px;background:#246;color:#fff;border:0;border-radius:6px}"
+
+#define PAGE_HEAD(NAV) \
+  "<!DOCTYPE html><html><head><meta charset='utf-8'>" \
+  "<meta name='viewport' content='width=device-width,initial-scale=1'>" \
+  "<title>RotorRemote</title><style>" PAGE_CSS "</style></head><body>" \
+  "<header><h1>RotorRemote</h1><div class='ver'>Firmware <span id='ver'>-</span></div>" \
+  "<nav>" NAV "</nav></header><main>"
+
+// Served from flash so no heap is needed to build the page.
+static const char HOME_PAGE[] PROGMEM =
+  PAGE_HEAD("<a class='on' href='/'>Home</a><a href='/update'>Update</a>")
+  "<p>rotctld: <span id='addr'>-</span></p>"
+  "<div class='grid'><div class='card'><h2>Azimuth</h2><div class='big' id='az'>-</div></div>"
+  "<div class='card'><h2>Motion</h2><div class='big' id='dir'>-</div></div></div>"
+  "<p class='note'>Target <span id='tgt'>-</span> &nbsp; Debug <span id='dbg'>-</span> &nbsp; "
+  "Client <span id='cli'>-</span> &nbsp; Heap <span id='hp'>-</span></p>"
+  "<div class='jog'><button id='ccw' type='button'>CCW</button><button id='cw' type='button'>CW</button></div>"
+  "<h2>rotctld / debug</h2>"
+  "<select class='log' id='log' size='12'></select>"
+  "<p><a href='/update'>Flash firmware over Wi-Fi</a></p>"
+  "<script>"
+  "async function tick(){try{const r=await fetch('/status',{cache:'no-store'});if(r.ok){const s=await r.json();"
+  "az.textContent=Number(s.az).toFixed(1)+'\\u00b0';"
+  "dir.textContent=s.dir;dir.style.color=s.turning?'#6f6':'#9ab';"
+  "tgt.textContent=s.target+'\\u00b0';dbg.textContent=s.debug?'on':'off';"
+  "cli.textContent=s.client?'connected':'none';"
+  "ver.textContent=s.ver;addr.textContent=s.ip+':'+s.port;hp.textContent=s.heap;"
+  "const el=log;el.innerHTML='';"
+  "(s.log||[]).forEach(t=>el.add(new Option(t)));"
+  "if(el.options.length)el.selectedIndex=el.options.length-1;"
+  "}}catch(e){}setTimeout(tick,800);}tick();"
+  "function bindJog(id,dir){const el=document.getElementById(id);let on=false,t=null;"
+  "const go=()=>fetch('/jog',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'dir='+dir});"
+  "el.addEventListener('pointerdown',e=>{e.preventDefault();el.setPointerCapture(e.pointerId);on=true;go();t=setInterval(go,200);});"
+  "const stop=()=>{if(!on)return;on=false;clearInterval(t);fetch('/jog',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'dir=stop'});};"
+  "el.addEventListener('pointerup',stop);el.addEventListener('pointercancel',stop);}"
+  "bindJog('ccw','ccw');bindJog('cw','cw');"
+  "</script></main></body></html>";
+
+static const char UPDATE_PAGE[] PROGMEM =
+  PAGE_HEAD("<a href='/'>Home</a><a class='on' href='/update'>Update</a>")
+  "<h2>Firmware update</h2>"
+  "<p>Use <strong>RotorRemote_ota.bin</strong> (app image). Do not upload the USB merged <strong>RotorRemote.bin</strong>.</p>"
+  "<form method='POST' action='/update' enctype='multipart/form-data'>"
+  "<input type='file' name='firmware' accept='.bin'>"
+  "<input type='submit' value='Flash'></form>"
+  "<p class='note'>Leave the home page before flashing: it polls the controller. "
+  "The display switches to Updating when the file transfer starts. "
+  "The controller restarts after a successful update.</p>"
+  "<script>fetch('/status').then(r=>r.json()).then(s=>{document.getElementById('ver').textContent=s.ver}).catch(()=>{});</script>"
+  "</main></body></html>";
 
 static char statusJson[3072];
 
@@ -200,6 +237,17 @@ static size_t buildStatusJson() {
   n = statusAdd(n, debug ? "true" : "false");
   n = statusAdd(n, ",\"client\":");
   n = statusAdd(n, (rotClient && rotClient.connected()) ? "true" : "false");
+  n = statusAdd(n, ",\"heap\":");
+  snprintf(num, sizeof(num), "%u", (unsigned)ESP.getFreeHeap());
+  n = statusAdd(n, num);
+  n = statusAdd(n, ",\"maxblk\":");
+  snprintf(num, sizeof(num), "%u", (unsigned)ESP.getMaxAllocHeap());
+  n = statusAdd(n, num);
+  n = statusAdd(n, ",\"ver\":\"" FW_VERSION "\",\"ip\":\"");
+  n = statusAdd(n, WiFi.localIP().toString().c_str());
+  n = statusAdd(n, "\",\"port\":");
+  snprintf(num, sizeof(num), "%d", rotPort);
+  n = statusAdd(n, num);
   n = statusAdd(n, ",\"log\":[");
   int start = (webLogHead + WEB_LOG_N - webLogCount) % WEB_LOG_N;
   for (int i = 0; i < webLogCount; i++) {
@@ -237,38 +285,12 @@ static void otaBegin() {
   ArduinoOTA.begin();
 
   httpOta.on("/", HTTP_GET, []() {
-    String ip = WiFi.localIP().toString();
-    String html = otaHtmlHead("RotorRemote", false);
-    html += "<p>rotctld: " + ip + ":" + String(rotPort) + "</p>";
-    html += "<div class='grid'><div class='card'><h2>Azimuth</h2><div class='big' id='az'>-</div></div>";
-    html += "<div class='card'><h2>Motion</h2><div class='big' id='dir'>-</div></div></div>";
-    html += "<p class='note'>Target <span id='tgt'>-</span> &nbsp; Debug <span id='dbg'>-</span> &nbsp; Client <span id='cli'>-</span></p>";
-    html += "<div class='jog'><button id='ccw' type='button'>CCW</button><button id='cw' type='button'>CW</button></div>";
-    html += "<h2>rotctld / debug</h2>";
-    html += "<select class='log' id='log' size='12'></select>";
-    html += "<p><a href='/update'>Flash firmware over Wi-Fi</a></p>";
-    html += "<script>";
-    html += "async function tick(){try{const r=await fetch('/status',{cache:'no-store'});if(r.ok){const s=await r.json();";
-    html += "az.textContent=Number(s.az).toFixed(1)+'\\u00b0';";
-    html += "dir.textContent=s.dir;dir.style.color=s.turning?'#6f6':'#9ab';";
-    html += "tgt.textContent=s.target+'\\u00b0';dbg.textContent=s.debug?'on':'off';";
-    html += "cli.textContent=s.client?'connected':'none';";
-    html += "const el=log;el.innerHTML='';";
-    html += "(s.log||[]).forEach(t=>el.add(new Option(t)));";
-    html += "if(el.options.length)el.selectedIndex=el.options.length-1;";
-    html += "}}catch(e){}setTimeout(tick,800);}tick();";
-    html += "function bindJog(id,dir){const el=document.getElementById(id);let on=false,t=null;";
-    html += "const go=()=>fetch('/jog',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'dir='+dir});";
-    html += "el.addEventListener('pointerdown',e=>{e.preventDefault();el.setPointerCapture(e.pointerId);on=true;go();t=setInterval(go,200);});";
-    html += "const stop=()=>{if(!on)return;on=false;clearInterval(t);fetch('/jog',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'dir=stop'});};";
-    html += "el.addEventListener('pointerup',stop);el.addEventListener('pointercancel',stop);}";
-    html += "bindJog('ccw','ccw');bindJog('cw','cw');";
-    html += "</script>";
-    html += "</main></body></html>";
-    httpOta.send(200, "text/html", html);
+    NETLOG("http / from %s", httpOta.client().remoteIP().toString().c_str());
+    httpOta.send_P(200, "text/html", HOME_PAGE);
   });
 
   httpOta.on("/status", HTTP_GET, []() {
+    statusHits++;
     if (otaBusy) {
       httpOta.send(503, "text/plain", "busy");
       return;
@@ -278,6 +300,7 @@ static void otaBegin() {
   });
 
   httpOta.on("/jog", HTTP_POST, []() {
+    jogHits++;
     if (otaBusy || menuOpen || b_autorotate) {
       if (webJog) {
         webJog = 0;
@@ -301,17 +324,7 @@ static void otaBegin() {
   });
 
   httpOta.on("/update", HTTP_GET, []() {
-    String html = otaHtmlHead("Firmware update", true);
-    html += "<h2>Firmware update</h2>";
-    html += "<p>Use <strong>RotorRemote_ota.bin</strong> (app image). Do not upload the USB merged <strong>RotorRemote.bin</strong>.</p>";
-    html += "<form method='POST' action='/update' enctype='multipart/form-data'>";
-    html += "<input type='file' name='firmware' accept='.bin'>";
-    html += "<input type='submit' value='Flash'></form>";
-    html += "<p class='note'>Leave the home page before flashing: it polls the controller. "
-            "The display switches to Updating when the file transfer starts. "
-            "The controller restarts after a successful update.</p>";
-    html += "</main></body></html>";
-    httpOta.send(200, "text/html", html);
+    httpOta.send_P(200, "text/html", UPDATE_PAGE);
   });
 
   httpOta.on("/update", HTTP_POST, []() {
@@ -461,22 +474,41 @@ void restartBluetooth() {
 }
 
 void applyLinkMode() {
-  preferences.putInt("link_mode", linkMode);
-  if (linkWantsBt()) {
-    if (!serialBtOn) {
-      SerialBT.begin(btName);
-      serialBtOn = true;
-    }
-  } else if (serialBtOn) {
-    SerialBT.end();
-    serialBtOn = false;
-  }
-
   if (linkWantsWifi()) {
     wifiRestart();
-  } else {
-    wifiStop();
+    return;
   }
+  wifiWanted = false;
+  if (!serialBtOn) {
+    SerialBT.begin(btName);
+    serialBtOn = true;
+  }
+}
+
+int linkEffectiveMode() {
+  return linkPendingMode >= 0 ? linkPendingMode : linkMode;
+}
+
+void linkTogglePending() {
+  int target = linkEffectiveMode() == LINK_WIFI ? LINK_BT : LINK_WIFI;
+  linkPendingMode = (target == linkMode) ? -1 : target;
+}
+
+void linkApplyPending() {
+  int mode = linkPendingMode;
+  linkPendingMode = -1;
+  if (mode >= 0 && mode != linkMode) switchLinkAndRestart(mode);
+}
+
+// The Bluetooth stack cannot be freed at runtime, so the radio choice takes effect after a restart.
+void switchLinkAndRestart(int mode) {
+  preferences.putInt("link_mode", mode);
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("Restarting...", 160, 120, 4);
+  delay(200);
+  ESP.restart();
 }
 
 void wifiConnectNow() {
@@ -488,10 +520,11 @@ void wifiConnectNow() {
   preferences.putString("ip_mask", ipMask);
   preferences.putString("ip_dns", ipDns);
   preferences.putInt("rot_port", rotPort);
-  if (linkMode == LINK_BT) {
-    linkMode = LINK_BOTH;
+  if (!linkWantsWifi()) {
+    linkPendingMode = LINK_WIFI;
+    return;
   }
-  applyLinkMode();
+  wifiRestart();
 }
 
 void wifiStartScan() {
@@ -550,32 +583,65 @@ int wifiScanRSSI(int i) {
   return WiFi.RSSI(i);
 }
 
-void rotctlSendPos(bool ext) {
-  char buf[16];
-  snprintf(buf, sizeof(buf), "%.1f", azimut);
-  rotClient.println(buf);
-  rotClient.println("0.0");
-  if (ext) rotClient.println("RPRT 0");
+static void netSlow(const char *what, unsigned long t0) {
+  unsigned long dt = millis() - t0;
+  if (dt >= 30) NETLOG("slow %s %lums", what, dt);
 }
 
-static bool rotctlIsPoll(const char *line) {
-  while (*line == ' ' || *line == '\t') line++;
-  if (*line == '\\' || *line == '+') line++;
-  while (*line == ' ' || *line == '\t') line++;
-  if (line[0] == 'p' && (line[1] == 0 || isspace((unsigned char)line[1]))) return true;
-  if (!strncmp(line, "get_pos", 7) && (line[7] == 0 || isspace((unsigned char)line[7]))) return true;
-  return false;
+static void netStats() {
+  if (!debug) return;
+  static unsigned long last = 0, lastStat = 0, maxGap = 0;
+  static int lastSt = -1;
+  unsigned long now = millis();
+  if (last && now - last > maxGap) maxGap = now - last;
+  last = now;
+  int st = linkWantsWifi() ? (int)WiFi.status() : -1;
+  if (st != lastSt) {
+    NETLOG("wifi status %d -> %d", lastSt, st);
+    lastSt = st;
+  }
+  if (now - lastStat >= 5000) {
+    lastStat = now;
+    NETLOG("stat heap=%u maxblk=%u gapmax=%lums rotClient=%d web status=%u jog=%u",
+           (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(), maxGap,
+           (rotClient && rotClient.connected()) ? 1 : 0, (unsigned)statusHits, (unsigned)jogHits);
+    maxGap = 0;
+  }
 }
+
+static void rotSend(const char *buf, size_t len) {
+  unsigned long t0 = millis();
+  size_t n = rotClient.write((const uint8_t *)buf, len);
+  NETLOG("tx %u/%u bytes %lums", (unsigned)n, (unsigned)len, (unsigned long)(millis() - t0));
+}
+
+static void rotReply(const char *s) {
+  char out[48];
+  int len = snprintf(out, sizeof(out), "%s\n", s);
+  rotSend(out, (size_t)len);
+}
+
+void rotctlSendPos(bool ext) {
+  char buf[40];
+  int len = snprintf(buf, sizeof(buf), "%.1f\n0.0\n%s", azimut, ext ? "RPRT 0\n" : "");
+  rotSend(buf, (size_t)len);
+}
+
+// Hamlib rotctld \dump_state layout; clients read up to "done".
+static const char ROT_DUMP_STATE[] =
+  "1\n1\nmin_az=0.000000\nmax_az=360.000000\nmin_el=0.000000\nmax_el=180.000000\n"
+  "south_zero=0\nrot_type=Az\ndone\n";
 
 void rotctlHandle(char *line) {
   while (*line == ' ' || *line == '\t') line++;
   if (*line == 0) return;
 
   bool ext = false;
-  if (*line == '\\' || *line == '+') {
+  if (*line == '+') {
     ext = true;
     line++;
   }
+  if (*line == '\\') line++;
   while (*line == ' ' || *line == '\t') line++;
   if (*line == 0) return;
 
@@ -592,21 +658,21 @@ void rotctlHandle(char *line) {
     float az = 0, el = 0;
     sscanf(line + 1, "%f %f", &az, &el);
     applyAzimuthTarget((int)(az + 0.5f));
-    rotClient.println("RPRT 0");
+    rotReply("RPRT 0");
     return;
   }
   if (!strncmp(line, "set_pos", 7)) {
     float az = 0, el = 0;
     sscanf(line + 7, "%f %f", &az, &el);
     applyAzimuthTarget((int)(az + 0.5f));
-    rotClient.println("RPRT 0");
+    rotReply("RPRT 0");
     return;
   }
 
   if ((line[0] == 'S' && (line[1] == 0 || isspace((unsigned char)line[1]))) ||
       (!strncmp(line, "stop", 4) && (line[4] == 0 || isspace((unsigned char)line[4])))) {
     stopAutorotate();
-    rotClient.println("RPRT 0");
+    rotReply("RPRT 0");
     return;
   }
 
@@ -616,33 +682,35 @@ void rotctlHandle(char *line) {
   }
 
   if (!strncmp(line, "dump_state", 10)) {
-    rotClient.println("2");
-    rotClient.println("1");
-    rotClient.println("0.000000");
-    rotClient.println("360.000000");
-    rotClient.println("0.000000");
-    rotClient.println("180.000000");
-    if (ext) rotClient.println("RPRT 0");
+    rotSend(ROT_DUMP_STATE, sizeof(ROT_DUMP_STATE) - 1);
+    if (ext) rotReply("RPRT 0");
     return;
   }
 
   if (line[0] == '_' || !strncmp(line, "get_info", 8)) {
-    rotClient.println("RotorRemote");
-    if (ext) rotClient.println("RPRT 0");
+    rotReply("RotorRemote");
+    if (ext) rotReply("RPRT 0");
     return;
   }
 
-  rotClient.println("RPRT -11");
+  rotReply("RPRT -11");
 }
 
 void rotctlRead() {
   int lines = 0;
+  int backlog = rotClient.available();
+  if (backlog > 48) NETLOG("rx backlog %d bytes", backlog);
   while (lines < 4 && rotClient.connected() && rotClient.available() > 0) {
     char c = (char)rotClient.read();
     if (c == '\r' || c == '\n') {
       if (rotLineLen > 0) {
         rotLine[rotLineLen] = '\0';
-        if (!rotctlIsPoll(rotLine)) webLog("rotctl", rotLine);
+        NETLOG("rx '%s'", rotLine);
+        static char lastLogged[sizeof(rotLine)];
+        if (strcmp(lastLogged, rotLine) != 0) {
+          webLog("rotctl", rotLine);
+          strcpy(lastLogged, rotLine);
+        }
         rotctlHandle(rotLine);
         rotLineLen = 0;
         lines++;
@@ -682,6 +750,7 @@ void rotctlService() {
 }
 
 void wifiService() {
+  netStats();
   wifiPollScan();
   webJogExpire();
 
@@ -710,9 +779,15 @@ void wifiService() {
       webLog("wifi", "rotctld listening");
       if (debug) Serial.println("rotctld listening on " + WiFi.localIP().toString() + ":" + String(rotPort));
     }
+    unsigned long t0 = millis();
     rotctlService();
+    netSlow("rotctlService", t0);
+    t0 = millis();
     ArduinoOTA.handle();
+    netSlow("ArduinoOTA", t0);
+    t0 = millis();
     httpOta.handleClient();
+    netSlow("handleClient", t0);
   } else if (!otaBusy && (rotServerStarted || otaReady)) {
     otaStop();
     rotctlStopServer();

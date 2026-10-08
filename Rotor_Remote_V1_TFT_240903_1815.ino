@@ -61,6 +61,7 @@ using fs::FS;
 #include <ArduinoOTA.h>
 #include <Update.h>
 #include <ctype.h>
+#include <esp_bt.h>
 #include <time.h>
 #include "RotorTypes.h"
 
@@ -104,6 +105,7 @@ static const int FOOT_MSG_W = 218;
 #define LINK_WIFI 1
 #define LINK_BOTH 2
 int linkMode = LINK_BT;
+int linkPendingMode = -1;  // radio change that takes effect when the menu is left
 String wifiSsid = "";
 String wifiPass = "";
 int ipMode = 0;  // 0 = DHCP, 1 = statisch
@@ -154,7 +156,12 @@ float v_turn = 0;               // holds the calculated turning speed per second
 const int speedSamples = 1500;  // amout of samples to average the measured rotor speed
 float v_turn_history[speedSamples];
 int v_turn_index = 0;
-int angle_old = 0;
+int angle_old = -1000;
+int lastShownAngle = -1;  // whole degrees on the angle bar
+int lastShownSpeed = -1;
+unsigned long lastTftUpdate = 0;
+const unsigned long TFT_TURN_MS = 250;   // display refresh while the rotor turns
+const unsigned long TFT_IDLE_MS = 2000;  // display refresh while it stands
 int rotCmd = 0;  // 0 = nichts, 1 = CCW (gegen den Uhrzeigersinn), 2 = CW (im Uhrzeigersinn)
 
 // variables for serial comms
@@ -186,6 +193,11 @@ const char *wifiStateLabel();
 String wifiIpCurrent();
 int wifiRssiBars();
 void applyLinkMode();
+void switchLinkAndRestart(int mode);
+int linkEffectiveMode();
+void linkTogglePending();
+void linkApplyPending();
+const char *linkModeName(int mode);
 void applyAzimuthTarget(int compassDeg);
 void stopAutorotate();
 void restartBluetooth();
@@ -219,10 +231,39 @@ void readButtons();
 void processButtonEvents();
 void replyBoth(const String &msg);
 
+void makeSprite(TFT_eSprite &s, int16_t w, int16_t h) {
+  s.setColorDepth(16);
+  if (!s.createSprite(w, h)) {  // with Bluetooth running 16 bit may not fit
+    s.setColorDepth(8);
+    s.createSprite(w, h);
+  }
+}
+
+void makeScaleSprite() {  // 16 bit colors; the scale is drawn in strips to save 38 KB of heap
+  spr.setColorDepth(16);
+  for (int h = 60; h >= 15; h /= 2) {
+    if (spr.createSprite(320, h)) return;
+  }
+}
+
 void setup() {
   preferences.begin("RotorRemote", false);  // Beginne die Verwendung des Preferences-Speichers für die Anwendung "RotorRemote"
   GetStoredSetup();                         // Read all preference values out of the memory
   Serial.begin(115200);                     // Begin Serial communication on the cable interface
+
+  if (linkMode == LINK_BT) {  // a crash in Bluetooth mode must not leave the unit in a reboot loop
+    esp_reset_reason_t rr = esp_reset_reason();
+    if (rr == ESP_RST_PANIC || rr == ESP_RST_INT_WDT || rr == ESP_RST_TASK_WDT) {
+      linkMode = LINK_WIFI;
+      preferences.putInt("link_mode", linkMode);
+    }
+  }
+
+  if (linkMode == LINK_WIFI) {  // must run before any Wi-Fi or Bluetooth init
+    uint32_t heapBefore = ESP.getFreeHeap();
+    esp_err_t btRel = esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
+    NETLOG("bt mem release=%d heap %u -> %u", (int)btRel, (unsigned)heapBefore, (unsigned)ESP.getFreeHeap());
+  }
 
   tft.init();
   tft.setRotation(1);
@@ -252,12 +293,14 @@ void setup() {
   dig_AZ_m = initialEstimate;
   dig_AZ_f = initialEstimate;
 
-  spr.createSprite(320, 120);              // Erstelle das Sprite
+  applyLinkMode();  // the radio needs its heap before the sprite takes its share
+  NETLOG("radio up heap=%u maxblk=%u", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+  makeScaleSprite();                       // Erstelle das Sprite
+  NETLOG("sprite %s heap=%u", spr.created() ? "ok" : "FAILED", (unsigned)ESP.getFreeHeap());
   spr.setTextColor(TFT_WHITE, TFT_BLACK);  // Textfarbe festlegen
   spr.setTextDatum(MC_DATUM);              // Textausrichtung zentriert
-  applyLinkMode();
   display_rotation_arrow();
-  drawAngleScale(azimut);                  // Initiale Anzeige des Rotorwinkels
+  drawAngleScale(roundedAzimuth());        // Initiale Anzeige des Rotorwinkels
   drawLinkStatus();
 }
 
@@ -302,11 +345,7 @@ void loop() {  //***************************************************************
   if (currentMillis - prevMillis >= interv) {  // 100ms timer for display and stuck detection
     prevMillis = currentMillis;
     rotctlService();
-    if (!menuOpen) {
-      tft_update();
-    } else {
-      menuRefreshLive();
-    }
+    if (menuOpen) menuRefreshLive();
     int abs_int = (int)azimut_abs;
     if (debug) Serial.println("Abs position: " + String(abs_int) + "deg - Target: " + String(azimut_tar) + "deg");
     if (b_autorotate == true && !menuOpen) {
@@ -325,6 +364,12 @@ void loop() {  //***************************************************************
         }
       }
     }
+  }
+
+  if (!menuOpen && millis() - lastTftUpdate >= (b_turning ? TFT_TURN_MS : TFT_IDLE_MS)) {
+    unsigned long drawStart = millis();
+    tft_update();
+    if (debug && millis() - drawStart >= 30) NETLOG("slow tft_update %lums", (unsigned long)(millis() - drawStart));
   }
 
   processSerialInput();
@@ -428,7 +473,7 @@ void glitchalarm() { // this switches off the alarm LED and gives a Display mess
   }
 }
 
-void drawAngleScale(float angle) { // Here we draw the big sprite with the angle scale
+void drawAngleScale(int angle) { // Here we draw the big sprite with the angle scale
   if (angle == angle_old) {
     return;
   } else {
@@ -444,14 +489,18 @@ void drawAngleScale(float angle) { // Here we draw the big sprite with the angle
   const float textOffsetRatio = 0.33;  // Abstand des Texts zur unteren Kante
 
   // Berechnungen
+  const int scaleH = 120;  // full instrument height, the sprite may hold only a strip of it
+  const int stripH = spr.height();
+  if (stripH <= 0) return;
   int centerX = spr.width() / 2;
-  int centerY = spr.height() / 2;
+  int centerY = scaleH / 2;
   float scaleWidth = 360 * 2;
   float pixelsPerDegree = 3;
   float offset = (angle * pixelsPerDegree);
 
   spr.setTextDatum(MC_DATUM);  // Ankerpunkt auf das Zentrum des Textes setzen
 
+  for (int yo = 0; yo < scaleH; yo += stripH) {
   // Farbverlauf von der Mitte nach außen
   for (int x = 0; x < spr.width(); x++) {
     float distance = abs(centerX - x);  // Abstand von der Mitte
@@ -463,11 +512,11 @@ void drawAngleScale(float angle) { // Here we draw the big sprite with the angle
     uint8_t b = ((1 - ratio) * (centerColor & 0x1F) + ratio * (edgeColor & 0x1F));
     uint16_t gradientColor = (r << 11) | (g << 5) | b;
 
-    spr.drawLine(x, 0, x, spr.height(), gradientColor);  // Zeichnet die Farbverlaufslinie
+    spr.drawLine(x, 0, x, stripH, gradientColor);  // Zeichnet die Farbverlaufslinie
   }
 
-  spr.drawLine(0, centerY, spr.width(), centerY, foregroundColor);  // Horizontale Linie zeichnen
-  spr.drawRoundRect(0, 0, spr.width(), spr.height(), 4, TFT_WHITE);
+  spr.drawLine(0, centerY - yo, spr.width(), centerY - yo, foregroundColor);  // Horizontale Linie zeichnen
+  spr.drawRoundRect(0, -yo, spr.width(), scaleH, 4, TFT_WHITE);
 
   // Markierungen und Beschriftungen zeichnen
   for (int i = -540; i <= 540; i += 10) {
@@ -475,20 +524,20 @@ void drawAngleScale(float angle) { // Here we draw the big sprite with the angle
 
     int lineLength = 0;
     if (i % 30 == 0) {  // Markerlänge bestimmen
-      lineLength = spr.height() * longLineRatio;
-      spr.drawLine(xPos, centerY - lineLength, xPos, centerY + lineLength, foregroundColor);  // Vertikale Marker zeichnen
+      lineLength = scaleH * longLineRatio;
+      spr.drawLine(xPos, centerY - lineLength - yo, xPos, centerY + lineLength - yo, foregroundColor);  // Vertikale Marker zeichnen
     } else {
-      lineLength = spr.height() * shortLineRatio;
-      spr.drawLine(xPos, centerY - lineLength, xPos, centerY + lineLength, foregroundColor);  // Vertikale Marker zeichnen
+      lineLength = scaleH * shortLineRatio;
+      spr.drawLine(xPos, centerY - lineLength - yo, xPos, centerY + lineLength - yo, foregroundColor);  // Vertikale Marker zeichnen
     }
 
     if (i % 30 == 0) {  // Beschriftung bei jedem 45. Grad
-      int textHeight = spr.height() * textOffsetRatio;
+      int textHeight = scaleH * textOffsetRatio;
       int displayAngle = (i + 360) % 360;
       spr.setTextColor(foregroundColor);
       char angBuf[8];
       snprintf(angBuf, sizeof(angBuf), "%d", displayAngle);
-      spr.drawString(angBuf, xPos + 2, centerY - textHeight, textSize);
+      spr.drawString(angBuf, xPos + 2, centerY - textHeight - yo, textSize);
       const char *direction = nullptr;
       switch (displayAngle) {
         case 0: direction = "N"; break;
@@ -501,13 +550,14 @@ void drawAngleScale(float angle) { // Here we draw the big sprite with the angle
         case 315: direction = "NW"; break;
       }
       if (direction) {
-        spr.drawString(direction, xPos, centerY + textHeight, textSize);
+        spr.drawString(direction, xPos, centerY + textHeight - yo, textSize);
       }
     }
   }
 
-  spr.drawLine(centerX, spr.height() - 10, centerX, 10, pointerColor);  // Den roten vertikalen Zeiger zeichnen
-  spr.pushSprite(0, 45);                                                // Sprite auf den Bildschirm übertragen
+  spr.drawLine(centerX, scaleH - 10 - yo, centerX, 10 - yo, pointerColor);  // Den roten vertikalen Zeiger zeichnen
+  spr.pushSprite(0, 45 + yo);                                               // Sprite auf den Bildschirm übertragen
+  }
 }
 
 void AutoRotate(int targetAzimuth) {
@@ -790,38 +840,48 @@ static void drawFixedCell(TFT_eSprite &s, char c, int x, int cellW) {
   s.drawString(tmp, x + (cellW - w) / 2, 0, 4);
 }
 
+int roundedAzimuth() {
+  int deg = (int)lroundf(azimut) % 360;
+  if (deg < 0) deg += 360;
+  return deg;
+}
+
 void tft_update() {
   if (menuOpen) return;
+  lastTftUpdate = millis();
   if (spr_angle.width() != 320 || spr_angle.height() != 25) {
     spr_angle.deleteSprite();
-    spr_angle.createSprite(320, 25);
+    makeSprite(spr_angle, 320, 25);
+    lastShownAngle = -1;
   }
+
+  int show = roundedAzimuth();
+  int speed = (int)v_turn;
+  if (speed < 0) speed = 0;
+  if (speed > 999) speed = 999;
+  if (show == lastShownAngle && speed == lastShownSpeed) {
+    drawLinkStatus();
+    return;
+  }
+  lastShownAngle = show;
+  lastShownSpeed = speed;
+
   spr_angle.setTextDatum(TL_DATUM);
   spr_angle.setTextPadding(0);
   spr_angle.setTextColor(TFT_WHITE, COLOR_BG);
   spr_angle.fillScreen(TFT_BLACK);
 
   static int digitW = 0;
-  static int dotW = 0;
   if (!digitW) {
     for (char c = '0'; c <= '9'; c++) {
       char tmp[2] = {c, 0};
       int w = spr_angle.textWidth(tmp, 4);
       if (w > digitW) digitW = w;
     }
-    dotW = spr_angle.textWidth(".", 4);
   }
 
-  float show = azimut;
-  while (show < 0) show += 360.0f;
-  while (show >= 360.0f) show -= 360.0f;
-  if (show >= 359.95f) show = 0;
   char angleTxt[8];
-  snprintf(angleTxt, sizeof(angleTxt), "%5.1f", show);
-
-  int speed = (int)v_turn;
-  if (speed < 0) speed = 0;
-  if (speed > 999) speed = 999;
+  snprintf(angleTxt, sizeof(angleTxt), "%3d", show);
   char speedTxt[8];
   snprintf(speedTxt, sizeof(speedTxt), "%3d", speed);
 
@@ -829,11 +889,8 @@ void tft_update() {
   spr_angle.drawString("Angle", x, 6, 2);
   x += spr_angle.textWidth("Angle", 2) + 4;
   for (int i = 0; angleTxt[i]; i++) {
-    char c = angleTxt[i];
-    int cell = (c == '.') ? dotW : digitW;
-    if (c == '.') spr_angle.drawString(".", x, 0, 4);
-    else drawFixedCell(spr_angle, c, x, cell);
-    x += cell + 1;
+    drawFixedCell(spr_angle, angleTxt[i], x, digitW);
+    x += digitW + 1;
   }
   x += 8;
   spr_angle.drawString("Speed", x, 6, 2);
@@ -844,7 +901,7 @@ void tft_update() {
   }
 
   spr_angle.pushSprite(0, 180);
-  drawAngleScale(azimut);
+  drawAngleScale(show);
   drawLinkStatus();
 }
 
@@ -856,7 +913,11 @@ void GetStoredSetup() {
   applyMedianSamples(medianSamples);
   btName = preferences.getString("name", "RotorRemote_2");
   linkMode = preferences.getInt("link_mode", LINK_BT);
-  if (linkMode < LINK_BT || linkMode > LINK_BOTH) linkMode = LINK_BT;
+  if (linkMode == LINK_BOTH) {  // older firmware allowed both radios at once
+    linkMode = LINK_WIFI;
+    preferences.putInt("link_mode", linkMode);
+  }
+  if (linkMode < LINK_BT || linkMode > LINK_WIFI) linkMode = LINK_BT;
   wifiSsid = preferences.getString("wifi_ssid", "");
   wifiPass = preferences.getString("wifi_pass", "");
   ipMode = preferences.getInt("ip_mode", 0);
@@ -887,12 +948,12 @@ void PrintStoredSetup() {
   replyBoth("");
 }
 
+const char *linkModeName(int mode) {
+  return mode == LINK_WIFI ? "Wi-Fi" : "Bluetooth";
+}
+
 const char *linkModeLabel() {
-  switch (linkMode) {
-    case LINK_WIFI: return "Wi-Fi";
-    case LINK_BOTH: return "Both";
-    default: return "Bluetooth";
-  }
+  return linkModeName(linkMode);
 }
 
 void applyAzimuthTarget(int compassDeg) {
@@ -987,17 +1048,19 @@ void processButtonEvents() {
 
 void drawMainScreen() {
   angle_old = -1000;
+  lastShownAngle = -1;
+  lastShownSpeed = -1;
   lastFooterKey = 0xFFFFFFFF;
   glitchMsgUntil = 0;
-  if (spr.width() != 320 || spr.height() != 120) {
+  if (!spr.created()) {
     spr.deleteSprite();
-    spr.createSprite(320, 120);
+    makeScaleSprite();
     spr.setTextColor(TFT_WHITE, TFT_BLACK);
     spr.setTextDatum(MC_DATUM);
   }
   if (spr_angle.width() != 320 || spr_angle.height() != 25) {
     spr_angle.deleteSprite();
-    spr_angle.createSprite(320, 25);
+    makeSprite(spr_angle, 320, 25);
   }
   tft.fillScreen(COLOR_BG);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);

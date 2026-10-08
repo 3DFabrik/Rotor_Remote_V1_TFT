@@ -40,9 +40,9 @@ AUX ist verdrahtet und als Ausgang gesetzt. Die Firmware schaltet ihn im normale
 
 Auf der Hauptseite drehen **CCW** und **CW**, solange der Taster gehalten wird. **BRK** drei Sekunden gedrückt öffnet das Menü. Im Menü wählen CCW und CW die Zeile. Ein kurzer Druck auf BRK bestätigt, drei Sekunden gehen eine Ebene zurück.
 
-- **Link** schaltet Bluetooth, WLAN oder beides.
-- **Wi-Fi** nimmt SSID, Passwort, DHCP oder eine feste Adresse, Gateway, Maske, DNS und den rotctld-Port. Speichern verbindet neu.
-- **Bluetooth** schaltet die Schnittstelle und den Gerätenamen.
+- **Link** wählt Bluetooth oder WLAN, nie beides. Die Auswahl wird beim Verlassen des Menüs gespeichert, dann startet der Controller neu.
+- **Wi-Fi** nimmt SSID, Passwort, DHCP oder eine feste Adresse, Gateway, Maske, DNS und den rotctld-Port. Speichern verbindet neu. Steht der Link auf Bluetooth, merkt sich Speichern den Wechsel auf WLAN, der beim Verlassen des Menüs gilt.
+- **Bluetooth** wählt Bluetooth (mit Neustart beim Verlassen des Menüs) und stellt den Gerätenamen ein.
 - **Calibration** zeigt Rohwert, Median und Geschwindigkeit. Von hier aus fährt der Rotor von Hand an die Anschläge, speichert Max CCW und MAX CW, setzt den Overshoot und startet die Auto-Kalibrierung.
 - **System** zeigt Version und OTA-Adresse, stellt die Median-Länge ein, schaltet Debug und startet neu.
 

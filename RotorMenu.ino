@@ -312,7 +312,7 @@ static void menuLabel(int i, char *buf, size_t n) {
   switch (menuPage) {
     case MP_SETUP:
       switch (i) {
-        case 0: snprintf(buf, n, "Link: %s", linkModeLabel()); break;
+        case 0: snprintf(buf, n, "Link: %s%s", linkModeName(linkEffectiveMode()), linkPendingMode >= 0 ? " (restart)" : ""); break;
         case 1: snprintf(buf, n, "Wi-Fi..."); break;
         case 2: snprintf(buf, n, "Bluetooth..."); break;
         case 3: snprintf(buf, n, "Calibration..."); break;
@@ -367,7 +367,7 @@ static void menuLabel(int i, char *buf, size_t n) {
       break;
     case MP_BT:
       switch (i) {
-        case 0: snprintf(buf, n, "Bluetooth: %s", linkWantsBt() ? "On" : "Off"); break;
+        case 0: snprintf(buf, n, "Bluetooth: %s%s", linkEffectiveMode() == LINK_BT ? "On" : "Off", linkPendingMode >= 0 ? " (restart)" : ""); break;
         case 1: snprintf(buf, n, "Name: %s", btName.c_str()); break;
         case 2: snprintf(buf, n, "Back"); break;
       }
@@ -580,6 +580,7 @@ static void menuGoto(MenuPage page) {
 
 static void menuLeave() {
   calStopAll();
+  linkApplyPending();
   menuOpen = false;
   wifiScanStop();
   drawMainScreen();
@@ -774,9 +775,7 @@ void menuOnRight() {
 static void menuSelectSetup() {
   switch (menuSel) {
     case 0:
-      linkMode++;
-      if (linkMode > LINK_BOTH) linkMode = LINK_BT;
-      applyLinkMode();
+      linkTogglePending();
       menuDrawRow(menuSel);
       break;
     case 1:
@@ -889,12 +888,7 @@ static void menuSelectSsid() {
 static void menuSelectBt() {
   switch (menuSel) {
     case 0:
-      if (linkWantsBt()) {
-        linkMode = LINK_WIFI;
-      } else {
-        linkMode = LINK_BOTH;
-      }
-      applyLinkMode();
+      linkTogglePending();
       menuDrawRow(menuSel);
       break;
     case 1:

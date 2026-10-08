@@ -156,6 +156,62 @@ static String otaHtmlHead(const char *title, bool onUpdate) {
   return h;
 }
 
+static char statusJson[3072];
+
+static size_t statusAdd(size_t n, const char *s) {
+  while (*s && n + 1 < sizeof(statusJson)) statusJson[n++] = *s++;
+  statusJson[n] = 0;
+  return n;
+}
+
+static size_t statusAddEsc(size_t n, const char *s) {
+  while (*s && n + 2 < sizeof(statusJson)) {
+    unsigned char c = (unsigned char)*s++;
+    if (c < 32) continue;
+    if (c == '"' || c == '\\') statusJson[n++] = '\\';
+    statusJson[n++] = (char)c;
+  }
+  statusJson[n] = 0;
+  return n;
+}
+
+static size_t buildStatusJson() {
+  const char *dir = "Stopped";
+  bool ccw = digitalRead(pin_out_CCW_relais);
+  bool cw = digitalRead(pin_out_CW_relais);
+  if (ccw) dir = "Turning CCW";
+  else if (cw) dir = "Turning CW";
+  int compassTarget = azimut_tar + 180;
+  if (compassTarget >= 360) compassTarget -= 360;
+  char num[16];
+  size_t n = 0;
+  statusJson[0] = 0;
+  n = statusAdd(n, "{\"az\":");
+  snprintf(num, sizeof(num), "%.1f", (double)azimut);
+  n = statusAdd(n, num);
+  n = statusAdd(n, ",\"target\":");
+  snprintf(num, sizeof(num), "%d", compassTarget);
+  n = statusAdd(n, num);
+  n = statusAdd(n, ",\"turning\":");
+  n = statusAdd(n, (ccw || cw) ? "true" : "false");
+  n = statusAdd(n, ",\"dir\":\"");
+  n = statusAdd(n, dir);
+  n = statusAdd(n, "\",\"debug\":");
+  n = statusAdd(n, debug ? "true" : "false");
+  n = statusAdd(n, ",\"client\":");
+  n = statusAdd(n, (rotClient && rotClient.connected()) ? "true" : "false");
+  n = statusAdd(n, ",\"log\":[");
+  int start = (webLogHead + WEB_LOG_N - webLogCount) % WEB_LOG_N;
+  for (int i = 0; i < webLogCount; i++) {
+    if (i) n = statusAdd(n, ",");
+    n = statusAdd(n, "\"");
+    n = statusAddEsc(n, webLogLines[(start + i) % WEB_LOG_N]);
+    n = statusAdd(n, "\"");
+  }
+  n = statusAdd(n, "]}");
+  return n;
+}
+
 static void otaStop() {
   if (!otaReady) return;
   httpOta.stop();
@@ -192,7 +248,7 @@ static void otaBegin() {
     html += "<select class='log' id='log' size='12'></select>";
     html += "<p><a href='/update'>Flash firmware over Wi-Fi</a></p>";
     html += "<script>";
-    html += "async function tick(){try{const r=await fetch('/status');if(!r.ok)return;const s=await r.json();";
+    html += "async function tick(){try{const r=await fetch('/status',{cache:'no-store'});if(r.ok){const s=await r.json();";
     html += "az.textContent=Number(s.az).toFixed(1)+'\\u00b0';";
     html += "dir.textContent=s.dir;dir.style.color=s.turning?'#6f6':'#9ab';";
     html += "tgt.textContent=s.target+'\\u00b0';dbg.textContent=s.debug?'on':'off';";
@@ -200,7 +256,7 @@ static void otaBegin() {
     html += "const el=log;el.innerHTML='';";
     html += "(s.log||[]).forEach(t=>el.add(new Option(t)));";
     html += "if(el.options.length)el.selectedIndex=el.options.length-1;";
-    html += "}catch(e){}}setInterval(tick,500);tick();";
+    html += "}}catch(e){}setTimeout(tick,800);}tick();";
     html += "function bindJog(id,dir){const el=document.getElementById(id);let on=false,t=null;";
     html += "const go=()=>fetch('/jog',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'dir='+dir});";
     html += "el.addEventListener('pointerdown',e=>{e.preventDefault();el.setPointerCapture(e.pointerId);on=true;go();t=setInterval(go,200);});";
@@ -217,38 +273,8 @@ static void otaBegin() {
       httpOta.send(503, "text/plain", "busy");
       return;
     }
-    const char *dir = "Stopped";
-    bool ccw = digitalRead(pin_out_CCW_relais);
-    bool cw = digitalRead(pin_out_CW_relais);
-    if (ccw) dir = "Turning CCW";
-    else if (cw) dir = "Turning CW";
-    int compassTarget = azimut_tar + 180;
-    if (compassTarget >= 360) compassTarget -= 360;
-    String json = "{";
-    json += "\"az\":" + String(azimut, 1);
-    json += ",\"target\":" + String(compassTarget);
-    json += ",\"turning\":";
-    json += (ccw || cw) ? "true" : "false";
-    json += ",\"dir\":\"";
-    json += dir;
-    json += "\",\"debug\":";
-    json += debug ? "true" : "false";
-    json += ",\"client\":";
-    json += (rotClient && rotClient.connected()) ? "true" : "false";
-    json += ",\"log\":[";
-    int start = (webLogHead + WEB_LOG_N - webLogCount) % WEB_LOG_N;
-    for (int i = 0; i < webLogCount; i++) {
-      if (i) json += ",";
-      json += "\"";
-      const char *s = webLogLines[(start + i) % WEB_LOG_N];
-      for (; *s; s++) {
-        if (*s == '"' || *s == '\\') json += '\\';
-        if (*s >= 32) json += *s;
-      }
-      json += "\"";
-    }
-    json += "]}";
-    httpOta.send(200, "application/json", json);
+    buildStatusJson();
+    httpOta.send(200, "application/json", statusJson);
   });
 
   httpOta.on("/jog", HTTP_POST, []() {
@@ -525,9 +551,20 @@ int wifiScanRSSI(int i) {
 }
 
 void rotctlSendPos(bool ext) {
-  rotClient.println(String(azimut, 1));
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%.1f", azimut);
+  rotClient.println(buf);
   rotClient.println("0.0");
   if (ext) rotClient.println("RPRT 0");
+}
+
+static bool rotctlIsPoll(const char *line) {
+  while (*line == ' ' || *line == '\t') line++;
+  if (*line == '\\' || *line == '+') line++;
+  while (*line == ' ' || *line == '\t') line++;
+  if (line[0] == 'p' && (line[1] == 0 || isspace((unsigned char)line[1]))) return true;
+  if (!strncmp(line, "get_pos", 7) && (line[7] == 0 || isspace((unsigned char)line[7]))) return true;
+  return false;
 }
 
 void rotctlHandle(char *line) {
@@ -599,20 +636,48 @@ void rotctlHandle(char *line) {
 }
 
 void rotctlRead() {
-  while (rotClient.connected() && rotClient.available() > 0) {
+  int lines = 0;
+  while (lines < 4 && rotClient.connected() && rotClient.available() > 0) {
     char c = (char)rotClient.read();
     if (c == '\r' || c == '\n') {
       if (rotLineLen > 0) {
         rotLine[rotLineLen] = '\0';
-        webLog("rotctl", rotLine);
+        if (!rotctlIsPoll(rotLine)) webLog("rotctl", rotLine);
         rotctlHandle(rotLine);
         rotLineLen = 0;
+        lines++;
       }
       continue;
     }
     if (rotLineLen < (int)sizeof(rotLine) - 1) {
       rotLine[rotLineLen++] = c;
     }
+  }
+}
+
+void rotctlService() {
+  if (!rotServerStarted || otaBusy) return;
+  if (rotServer.hasClient()) {
+    WiFiClient incoming = rotServer.available();
+    if (rotClient && rotClient.connected()) {
+      rotClient.stop();
+      webLog("rotctl", "client replaced");
+    }
+    rotClient = incoming;
+    rotClient.setNoDelay(true);
+    rotClient.setTimeout(1000);
+    rotLineLen = 0;
+    webLog("rotctl", "client connected");
+    if (debug) Serial.println("rotctld client connected");
+  }
+  static bool rotHadClient = false;
+  if (rotClient && rotClient.connected()) {
+    rotHadClient = true;
+    rotctlRead();
+  } else if (rotHadClient) {
+    rotHadClient = false;
+    webLog("rotctl", "client gone");
+    rotClient.stop();
   }
 }
 
@@ -645,28 +710,9 @@ void wifiService() {
       webLog("wifi", "rotctld listening");
       if (debug) Serial.println("rotctld listening on " + WiFi.localIP().toString() + ":" + String(rotPort));
     }
+    rotctlService();
     ArduinoOTA.handle();
     httpOta.handleClient();
-    if (rotServer.hasClient()) {
-      WiFiClient incoming = rotServer.available();
-      if (rotClient && rotClient.connected()) {
-        rotClient.stop();
-      }
-      rotClient = incoming;
-      rotClient.setNoDelay(true);
-      rotLineLen = 0;
-      webLog("rotctl", "client connected");
-      if (debug) Serial.println("rotctld client connected");
-    }
-    static bool rotHadClient = false;
-    if (rotClient && rotClient.connected()) {
-      rotHadClient = true;
-      rotctlRead();
-    } else if (rotHadClient) {
-      rotHadClient = false;
-      webLog("rotctl", "client gone");
-      rotClient.stop();
-    }
   } else if (!otaBusy && (rotServerStarted || otaReady)) {
     otaStop();
     rotctlStopServer();

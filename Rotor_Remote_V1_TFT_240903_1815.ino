@@ -190,6 +190,7 @@ void applyAzimuthTarget(int compassDeg);
 void stopAutorotate();
 void restartBluetooth();
 void wifiService();
+void rotctlService();
 void wifiConnectNow();
 void wifiStartScan();
 void wifiScanStop();
@@ -300,6 +301,7 @@ void loop() {  //***************************************************************
 
   if (currentMillis - prevMillis >= interv) {  // 100ms timer for display and stuck detection
     prevMillis = currentMillis;
+    rotctlService();
     if (!menuOpen) {
       tft_update();
     } else {
@@ -328,6 +330,7 @@ void loop() {  //***************************************************************
   processSerialInput();
   processBluetoothInput();
   wifiService();
+  delay(1);
 }
 
 void readCommandLine(Stream &s, char *buffer, int &i) {
@@ -483,8 +486,10 @@ void drawAngleScale(float angle) { // Here we draw the big sprite with the angle
       int textHeight = spr.height() * textOffsetRatio;
       int displayAngle = (i + 360) % 360;
       spr.setTextColor(foregroundColor);
-      spr.drawString(String(displayAngle), xPos + 2, centerY - textHeight, textSize);  // Position der Winkelbeschriftung
-      String direction = "";                                                           // Himmelsrichtungen anzeigen
+      char angBuf[8];
+      snprintf(angBuf, sizeof(angBuf), "%d", displayAngle);
+      spr.drawString(angBuf, xPos + 2, centerY - textHeight, textSize);
+      const char *direction = nullptr;
       switch (displayAngle) {
         case 0: direction = "N"; break;
         case 45: direction = "NE"; break;
@@ -495,8 +500,8 @@ void drawAngleScale(float angle) { // Here we draw the big sprite with the angle
         case 270: direction = "W"; break;
         case 315: direction = "NW"; break;
       }
-      if (direction != "") {
-        spr.drawString(direction, xPos, centerY + textHeight, textSize);  // Position der Himmelsrichtung
+      if (direction) {
+        spr.drawString(direction, xPos, centerY + textHeight, textSize);
       }
     }
   }
@@ -780,8 +785,9 @@ void SerComm(char *buffer) {
 
 static void drawFixedCell(TFT_eSprite &s, char c, int x, int cellW) {
   if (c == ' ' || c == '\0') return;
-  int w = s.textWidth(String(c), 4);
-  s.drawString(String(c), x + (cellW - w) / 2, 0, 4);
+  char tmp[2] = {c, 0};
+  int w = s.textWidth(tmp, 4);
+  s.drawString(tmp, x + (cellW - w) / 2, 0, 4);
 }
 
 void tft_update() {
@@ -795,12 +801,16 @@ void tft_update() {
   spr_angle.setTextColor(TFT_WHITE, COLOR_BG);
   spr_angle.fillScreen(TFT_BLACK);
 
-  int digitW = 0;
-  for (char c = '0'; c <= '9'; c++) {
-    int w = spr_angle.textWidth(String(c), 4);
-    if (w > digitW) digitW = w;
+  static int digitW = 0;
+  static int dotW = 0;
+  if (!digitW) {
+    for (char c = '0'; c <= '9'; c++) {
+      char tmp[2] = {c, 0};
+      int w = spr_angle.textWidth(tmp, 4);
+      if (w > digitW) digitW = w;
+    }
+    dotW = spr_angle.textWidth(".", 4);
   }
-  int dotW = spr_angle.textWidth(".", 4);
 
   float show = azimut;
   while (show < 0) show += 360.0f;

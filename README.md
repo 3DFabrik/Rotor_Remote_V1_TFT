@@ -48,6 +48,18 @@ Auf der Hauptseite drehen **CCW** und **CW**, solange der Taster gehalten wird. 
 
 Alles bleibt im Speicher unter dem Namen `RotorRemote`.
 
+### Hauptseite
+
+Nach dem Einschalten zeigt das Display kurz Name, Firmware-Version und Link-Modus. Danach folgt die Hauptseite:
+
+- Oben stehen die Pfeile für CCW und CW und in der Mitte BRAKE.
+- Die Skala zeigt den Kompasswinkel. Läuft eine Autorotation, markiert ein gelber Strich das Ziel. Liegt es außerhalb der Skala, zeigt ein gelber Pfeil am Rand die Richtung.
+- Darunter stehen Winkel mit Himmelsrichtung und die Geschwindigkeit in °/s. Der Winkel wird orange, wenn er höchstens 15 ° vom Anschlag entfernt ist, und rot ab 3 °. Das gilt nur bei gültiger Kalibrierung. Das Bild wird im Stand alle 2 Sekunden erneuert, während der Fahrt alle 250 ms.
+- Die Fußzeile links zeigt die Alarme `ROTOR STUCK!` und `SENSOR GLITCH` in Rot. Sonst steht dort `Goto <Winkel>` während einer Autorotation, im Stand bei WLAN die IP-Adresse.
+- Rechts in der Fußzeile stehen die Link-Symbole. Das kleine Monitor-Symbol neben dem WLAN-Symbol ist grau, solange rotctld wartet, und grün, solange ein Client verbunden ist.
+
+Im Menü zeigen kleine Pfeile am rechten Rand, dass oberhalb oder unterhalb weitere Zeilen liegen.
+
 ## Fahren und Anschläge
 
 CW erhöht die ADC-Digits, CCW senkt sie. `az_min_digit` ist Max CCW, `az_max_digit` ist MAX CW.
@@ -66,7 +78,7 @@ Der ADC wird jede Millisekunde gelesen.
 
 1. Ein laufender Median nimmt kurze Spikes des Drahtpotis weg. Die Länge wird im Systemmenü eingestellt, von 3 bis 255. Der Startwert ist 100 und bleibt gespeichert. Bei einer geraden Länge mittelt das Programm die beiden mittleren Samples.
 2. Ein Kalman-Filter glättet daraus den angezeigten Winkel. Im Stand, solange die Bremse offen ist, ist dieser Filter zehnmal stärker. Während der Fahrt bleibt er leicht, damit das Ziel rechtzeitig gemeldet wird.
-3. Die Geschwindigkeit ist ein Mittel über etwa 1,5 Sekunden. Steht der Rotor, zeigt sie 0.
+3. Die Geschwindigkeit ergibt sich alle 100 ms aus der Winkeländerung über die letzte Sekunde, geteilt durch die echte Zeit. Die Schleife läuft nicht mit festem Takt, deshalb zählt der Zeitstempel und nicht die Anzahl der Messungen. Das Display zeigt den Betrag, auch bei CCW. Steht der Rotor, zeigt sie 0.
 
 Der Kompasswinkel auf dem Display und über rotctld ist der absolute Winkel plus 180 °, einmal um 360 ° herumgelegt. Die gespeicherten Enden und der 30-Digit-Abstand nutzen den Median.
 
@@ -111,9 +123,9 @@ Dieselben Kurzbefehle gehen an USB-Serial mit 115200 Baud und an Bluetooth. Die 
 
 ## Update über WLAN
 
-Im Browser `http://<ip>/` zeigt die Startseite den aktuellen Winkel, die Fahrtrichtung, Taster für CCW und CW und eine Liste der letzten Befehle mit Datum und Uhrzeit. **Update** startet das Firmware-Update. Nach dem Neustart öffnet sich die Startseite wieder und zeigt die neue Firmware-Version. Hochgeladen wird `firmware/RotorRemote_ota.bin`. Die Datei `RotorRemote.bin` ist das USB-Abbild.
+Im Browser `http://<ip>/` zeigt die Startseite den aktuellen Winkel, die Fahrtrichtung, einen Kompass mit Zeiger und Zielmarke, ein Abzeichen für den rotctld-Client, Taster für CCW und CW und eine Liste der letzten Befehle mit Datum und Uhrzeit. Der Reiter **Update** startet das Firmware-Update. Nach dem Neustart öffnet sich die Startseite wieder und zeigt die neue Firmware-Version. Hochgeladen wird `firmware/RotorRemote_ota.bin`. Die Datei `RotorRemote.bin` ist das USB-Abbild.
 
-Die Update-Seite lässt den Controller in Ruhe, bis die Datei gesendet wird. Dann zeigt das Display „Updating...“ und rotctld wird getrennt. Bricht der Upload ab, erscheint „Update failed“ mit dem Grund, und der Controller startet neu. Fällt das WLAN dabei weg, startet er nach ein paar Sekunden ebenfalls neu.
+Die Update-Seite lässt den Controller in Ruhe, bis die Datei gesendet wird. Dann zeigt das Display „Updating...“ mit Fortschrittsbalken und Prozentanzeige, und rotctld wird getrennt. Nach dem Schreiben erscheint „Update OK“ und der Neustart. Bricht der Upload ab, erscheint „Update failed“ mit dem Grund, und der Controller startet neu. Fällt das WLAN dabei weg, startet er nach ein paar Sekunden ebenfalls neu.
 
 Ein USB-Flash, falls er einmal nötig ist, nutzt den ESP32 Dev Module mit `PartitionScheme=min_spiffs` und 921600 Baud. Port und Board stehen in `sketch.yaml`.
 

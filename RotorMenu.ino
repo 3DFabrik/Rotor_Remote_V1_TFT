@@ -73,7 +73,7 @@ static void calDrawStatus() {
   tft.setTextDatum(TL_DATUM);
   tft.setTextColor(calPhase == CAL_IDLE ? TFT_ORANGE : TFT_GREEN, TFT_BLACK);
   tft.setTextPadding(320);
-  tft.drawString(calStatus, 8, 210, 2);
+  tft.drawString(calStatus, 8, 198, 2);  // stays clear of the hint line at y=222
   tft.setTextPadding(0);
 }
 
@@ -440,6 +440,12 @@ static void menuDrawRow(int absIndex, bool live = false) {
   tft.setTextColor(fg, bg);
   if (buf[0]) tft.drawString(buf, 8, y + 2, 2);
   tft.setTextPadding(0);
+  if (vis == 0 && menuScroll > 0) {
+    tft.fillTriangle(316, y + 5, 312, y + 13, 319, y + 13, TFT_SILVER);
+  }
+  if (vis == MENU_VIS - 1 && menuScroll + MENU_VIS < n) {
+    tft.fillTriangle(316, y + 14, 312, y + 6, 319, y + 6, TFT_SILVER);
+  }
 }
 
 static void menuDrawList() {

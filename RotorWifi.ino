@@ -89,11 +89,33 @@ int wifiRssiBars() {
   return 0;
 }
 
-static void otaShowScreen(const char *msg) {
+static void otaShowScreen(const char *msg, const char *sub = nullptr) {
   tft.fillScreen(TFT_BLACK);
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
   tft.drawString(msg, 160, 120, 4);
+  if (sub) {
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.drawString(sub, 160, 160, 2);
+  }
+  tft.setTextDatum(TL_DATUM);
+}
+
+static int otaPct = -1;
+
+static void otaDrawProgress(unsigned long done, unsigned long total) {
+  if (!total) return;
+  int pct = (int)(done * 100UL / total);
+  if (pct > 100) pct = 100;
+  if (pct == otaPct) return;
+  otaPct = pct;
+  tft.drawRoundRect(40, 150, 240, 16, 3, TFT_WHITE);
+  tft.fillRect(42, 152, (236 * pct) / 100, 12, TFT_GREEN);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextPadding(80);
+  tft.drawString(String(pct) + "%", 160, 190, 4);
+  tft.setTextPadding(0);
   tft.setTextDatum(TL_DATUM);
 }
 
@@ -130,10 +152,14 @@ bool otaIsBusy() {
   "main{padding:24px;max-width:640px}" \
   "p{line-height:1.45}" \
   ".note{color:#9ab}" \
-  ".grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0}" \
+  ".top{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:12px 0}" \
+  ".cards{display:flex;flex-direction:column;gap:12px;flex:1;min-width:150px}" \
+  ".top svg{flex:none;width:200px;height:200px}" \
   ".card{background:#1a2332;border:1px solid #345;border-radius:8px;padding:14px}" \
   ".card h2{margin:0 0 8px;font-size:13px;color:#9ab;font-weight:normal}" \
   ".big{font-size:28px;color:#6cf}" \
+  ".badge{display:inline-block;padding:2px 10px;border-radius:10px;background:#333;color:#9ab;font-size:12px}" \
+  ".badge.on{background:#1a6;color:#fff}" \
   "select.log{width:100%;height:220px;background:#0d1117;color:#c9d1d9;border:1px solid #345;" \
   "font-family:ui-monospace,monospace;font-size:13px;padding:4px}" \
   ".jog{display:flex;gap:12px;margin:8px 0 18px}" \
@@ -152,21 +178,33 @@ bool otaIsBusy() {
 // Served from flash so no heap is needed to build the page.
 static const char HOME_PAGE[] PROGMEM =
   PAGE_HEAD("<a class='on' href='/'>Home</a><a href='/update'>Update</a>")
-  "<p>rotctld: <span id='addr'>-</span></p>"
-  "<div class='grid'><div class='card'><h2>Azimuth</h2><div class='big' id='az'>-</div></div>"
+  "<p>rotctld: <span id='addr'>-</span> <span id='badge' class='badge'>no client</span></p>"
+  "<div class='top'><div class='cards'>"
+  "<div class='card'><h2>Azimuth</h2><div class='big' id='az'>-</div></div>"
   "<div class='card'><h2>Motion</h2><div class='big' id='dir'>-</div></div></div>"
-  "<p class='note'>Target <span id='tgt'>-</span> &nbsp; Debug <span id='dbg'>-</span> &nbsp; "
-  "Client <span id='cli'>-</span> &nbsp; Heap <span id='hp'>-</span></p>"
+  "<svg viewBox='0 0 200 200'>"
+  "<circle cx='100' cy='100' r='84' fill='#0d1117' stroke='#345' stroke-width='2'/><g id='ticks'></g>"
+  "<g fill='#6cf' font-size='14' text-anchor='middle'><text x='100' y='52'>N</text><text x='100' y='158'>S</text>"
+  "<text x='166' y='106'>E</text><text x='34' y='106'>W</text></g>"
+  "<g id='tg' visibility='hidden'><polygon points='100,15 93,2 107,2' fill='#fc3'/></g>"
+  "<g id='ndl'><polygon points='100,24 94,100 106,100' fill='#e33'/><polygon points='100,176 94,100 106,100' fill='#456'/></g>"
+  "<circle cx='100' cy='100' r='5' fill='#9ab'/></svg></div>"
+  "<p class='note'>Target <span id='tgt'>-</span> &nbsp; Debug <span id='dbg'>-</span> &nbsp; Heap <span id='hp'>-</span></p>"
   "<div class='jog'><button id='ccw' type='button'>CCW</button><button id='cw' type='button'>CW</button></div>"
   "<h2>rotctld / debug</h2>"
   "<select class='log' id='log' size='12'></select>"
-  "<p><a href='/update'>Flash firmware over Wi-Fi</a></p>"
   "<script>"
+  "for(let i=0;i<36;i++){const l=document.createElementNS('http://www.w3.org/2000/svg','line');"
+  "l.setAttribute('x1',100);l.setAttribute('y1',16);l.setAttribute('x2',100);l.setAttribute('y2',16+(i%9==0?14:i%3==0?9:5));"
+  "l.setAttribute('stroke','#9ab');l.setAttribute('transform','rotate('+i*10+' 100 100)');ticks.appendChild(l);}"
   "async function tick(){try{const r=await fetch('/status',{cache:'no-store'});if(r.ok){const s=await r.json();"
   "az.textContent=Number(s.az).toFixed(1)+'\\u00b0';"
   "dir.textContent=s.dir;dir.style.color=s.turning?'#6f6':'#9ab';"
   "tgt.textContent=s.target+'\\u00b0';dbg.textContent=s.debug?'on':'off';"
-  "cli.textContent=s.client?'connected':'none';"
+  "badge.textContent=s.client?'client connected':'no client';badge.className=s.client?'badge on':'badge';"
+  "ndl.setAttribute('transform','rotate('+s.az+' 100 100)');"
+  "if(s.auto){tg.setAttribute('visibility','visible');tg.setAttribute('transform','rotate('+s.target+' 100 100)');}"
+  "else tg.setAttribute('visibility','hidden');"
   "ver.textContent=s.ver;addr.textContent=s.ip+':'+s.port;hp.textContent=s.heap;"
   "const el=log;el.innerHTML='';"
   "(s.log||[]).forEach(t=>el.add(new Option(t)));"
@@ -231,6 +269,11 @@ static size_t buildStatusJson() {
   n = statusAdd(n, num);
   n = statusAdd(n, ",\"turning\":");
   n = statusAdd(n, (ccw || cw) ? "true" : "false");
+  n = statusAdd(n, ",\"auto\":");
+  n = statusAdd(n, b_autorotate ? "true" : "false");
+  n = statusAdd(n, ",\"speed\":");
+  snprintf(num, sizeof(num), "%.1f", (double)v_turn);
+  n = statusAdd(n, num);
   n = statusAdd(n, ",\"dir\":\"");
   n = statusAdd(n, dir);
   n = statusAdd(n, "\",\"debug\":");
@@ -273,10 +316,14 @@ static void otaBegin() {
   ArduinoOTA.setHostname(btName.length() ? btName.c_str() : "RotorRemote");
   ArduinoOTA.onStart([]() {
     otaQuiesceNetwork();
+    otaPct = -1;
     otaShowScreen("Updating...");
   });
+  ArduinoOTA.onProgress([](unsigned int done, unsigned int total) {
+    otaDrawProgress(done, total);
+  });
   ArduinoOTA.onEnd([]() {
-    otaShowScreen("Update OK");
+    otaShowScreen("Update OK", "Restarting...");
   });
   ArduinoOTA.onError([](ota_error_t err) {
     (void)err;
@@ -330,11 +377,11 @@ static void otaBegin() {
   httpOta.on("/update", HTTP_POST, []() {
     httpOta.sendHeader("Connection", "close");
     if (otaOk) {
-      otaShowScreen("Update OK");
+      otaShowScreen("Update OK", "Restarting...");
       httpOta.send(200, "text/html",
         "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Restarting</title>"
         "<style>body{font-family:sans-serif;background:#111;color:#eee;padding:24px}h1{color:#6cf}</style>"
-        "</head><body><h1>Neustart</h1><p>Die neue Firmware kommt gleich.</p>"
+        "</head><body><h1>Restarting</h1><p>The new firmware will be ready in a moment.</p>"
         "<script>async function back(){try{const r=await fetch('/',{cache:'no-store'});"
         "if(r.ok){location.replace('/');return;}}catch(e){}setTimeout(back,1000);}"
         "setTimeout(back,2000);</script></body></html>");
@@ -365,6 +412,7 @@ static void otaBegin() {
       spr.deleteSprite();
       spr_angle.deleteSprite();
       otaShowScreen("Updating...");
+      otaPct = -1;
       Update.abort();
       WiFi.setSleep(false);
       httpOta.client().setTimeout(60000);
@@ -382,6 +430,7 @@ static void otaBegin() {
           Update.printError(Serial);
           Serial.println(otaErr);
         }
+        otaDrawProgress(upload.totalSize, httpOta.clientContentLength());
       }
       yield();
     } else if (upload.status == UPLOAD_FILE_END) {
@@ -406,6 +455,14 @@ static void otaBegin() {
   httpOta.begin();
   otaReady = true;
   if (debug) Serial.println("OTA http://" + WiFi.localIP().toString() + "/update");
+}
+
+bool rotctlListening() {
+  return rotServerStarted && !otaBusy;
+}
+
+bool rotctlClientConnected() {
+  return rotServerStarted && rotClient && rotClient.connected();
 }
 
 void rotctlCloseClient() {
@@ -736,6 +793,7 @@ void rotctlService() {
     rotClient.setTimeout(1000);
     rotLineLen = 0;
     webLog("rotctl", "client connected");
+    drawLinkStatus();
     if (debug) Serial.println("rotctld client connected");
   }
   static bool rotHadClient = false;
@@ -746,6 +804,7 @@ void rotctlService() {
     rotHadClient = false;
     webLog("rotctl", "client gone");
     rotClient.stop();
+    drawLinkStatus();
   }
 }
 
@@ -777,6 +836,7 @@ void wifiService() {
       rotServerStarted = true;
       rotLineLen = 0;
       webLog("wifi", "rotctld listening");
+      drawLinkStatus();
       if (debug) Serial.println("rotctld listening on " + WiFi.localIP().toString() + ":" + String(rotPort));
     }
     unsigned long t0 = millis();

@@ -83,6 +83,7 @@ void applyMedianSamples(int n) {
 }
 
 #define TFT_VDARKGREY 0x3186  // super dark grey
+#define TFT_MIDGREY 0xAD55    // labels and secondary text
 int COLOR_BG = TFT_BLACK;
 
 TFT_eSPI tft = TFT_eSPI();  // Invoke library
@@ -93,6 +94,8 @@ bool debug = false;
 bool menuOpen = false;
 bool msgStuck = false;
 uint32_t lastFooterKey = 0xFFFFFFFF;
+uint32_t lastLeftKey = 0xFFFFFFFF;
+uint32_t lastLeftIp = 0;
 unsigned long glitchMsgUntil = 0;
 bool serialBtOn = false;
 bool wifiWanted = false;
@@ -152,13 +155,17 @@ bool b_autorotate = false;      // Gets set whenever a rotate-command is receive
 int a_overshoot = 3;            // Angle that the rotor overshoots
 int az_max_digit = 3510;        // Wert vom AZ-pin beim max. Endanschlag vom Rotor
 int az_min_digit = 0;           // Wert vom AZ-pin beim min. Endanschlag vom Rotor
-float v_turn = 0;               // holds the calculated turning speed per second
-const int speedSamples = 1500;  // amout of samples to average the measured rotor speed
-float v_turn_history[speedSamples];
-int v_turn_index = 0;
+float v_turn = 0;               // turning speed in deg/s, signed, measured over the last second
+const int speedSamples = 11;    // positions taken every 100 ms, 11 of them span 1 s
+float v_pos[speedSamples];
+unsigned long v_time[speedSamples];
+int v_index = 0;
+int v_filled = 0;
 int angle_old = -1000;
 int lastShownAngle = -1;  // whole degrees on the angle bar
 int lastShownSpeed = -1;
+int lastShownTgt = -2;
+uint16_t lastShownCol = 0;
 unsigned long lastTftUpdate = 0;
 const unsigned long TFT_TURN_MS = 250;   // display refresh while the rotor turns
 const unsigned long TFT_IDLE_MS = 2000;  // display refresh while it stands
@@ -185,7 +192,6 @@ int command_old = 0;       // used to detect if the command has changed
 int stucktime = 0;         // increases once per display cycle if the expected angle change has not happened
 int stop_stucktime = 3;    // When elapsed the rotator power gets switched off
 float degpersec = 3;       // expected degree per second that the rotor should do when running free (measured roughly 6.5°/s)
-float azimut_abs_old = 0;  // hold the sample taken interv-time before
 String btName = "";        // holds the name of the bluetooth link
 
 const char *linkModeLabel();
@@ -213,6 +219,8 @@ String wifiScanSSID(int i);
 int wifiScanRSSI(int i);
 bool linkWantsBt();
 bool linkWantsWifi();
+bool rotctlListening();
+bool rotctlClientConnected();
 void menuEnter();
 void menuOnBack();
 void menuOnSelect();
@@ -270,10 +278,15 @@ void setup() {
   tft.setTextColor(TFT_WHITE, COLOR_BG);
   tft.setTextSize(1);
   tft.fillScreen(COLOR_BG);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
+  tft.drawString("RotorRemote", 160, 90, 4);
+  tft.setTextColor(TFT_MIDGREY, TFT_BLACK);
+  tft.drawString("Firmware " FW_VERSION, 160, 125, 2);
+  tft.drawString(String("Link: ") + linkModeLabel(), 160, 148, 2);
+  tft.setTextDatum(TL_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawRoundRect(0, 0, 105, 35, 4, TFT_WHITE);
-  tft.drawRoundRect(110, 0, 100, 35, 4, TFT_WHITE);
-  tft.drawRoundRect(215, 0, 105, 35, 4, TFT_WHITE);
+  unsigned long splashEnd = millis() + 1500;
 
   pinMode(pin_in_AZ, INPUT);
   pinMode(pin_in_CCW, INPUT_PULLUP);
@@ -299,9 +312,8 @@ void setup() {
   NETLOG("sprite %s heap=%u", spr.created() ? "ok" : "FAILED", (unsigned)ESP.getFreeHeap());
   spr.setTextColor(TFT_WHITE, TFT_BLACK);  // Textfarbe festlegen
   spr.setTextDatum(MC_DATUM);              // Textausrichtung zentriert
-  display_rotation_arrow();
-  drawAngleScale(roundedAzimuth());        // Initiale Anzeige des Rotorwinkels
-  drawLinkStatus();
+  while ((long)(splashEnd - millis()) > 0) delay(10);
+  drawMainScreen();
 }
 
 void loop() {  //***************************************************************************************************************************
@@ -344,6 +356,7 @@ void loop() {  //***************************************************************
 
   if (currentMillis - prevMillis >= interv) {  // 100ms timer for display and stuck detection
     prevMillis = currentMillis;
+    updateSpeed();
     rotctlService();
     if (menuOpen) menuRefreshLive();
     int abs_int = (int)azimut_abs;
@@ -426,28 +439,26 @@ void CalcPosition() {
   float gain = 360.0 / (az_max_digit - az_min_digit);  // Skalierungsfaktor berechnen
   azimut_abs = (dig_AZ_f - az_min_digit) * gain;       // Anwendung des Skalierungsfaktors
 
-  // Berechnung der Rotationsgeschwindigkeit (Grad pro Sekunde)
-  float v_turn_raw = (azimut_abs - azimut_abs_old) * 1000.0;  // Geschwindigkeit pro Sekunde
-  v_turn = calculateFilteredSpeed(v_turn_raw);                // Geschwindigkeit filtern
-  if (!b_turning) v_turn = 0;
-
-  // Aktualisieren des alten Azimut-Werts für den nächsten Zyklus
-  azimut_abs_old = azimut_abs;
+  // Berechnung der Rotationsgeschwindigkeit: siehe updateSpeed()
 
   // Azimut für Steuerung
   azimut = azimut_abs + 180;
   if (azimut >= 360) { azimut = azimut - 360; }
 }
 
-float calculateFilteredSpeed(float newSpeed) {
-  v_turn_history[v_turn_index] = newSpeed;
-  v_turn_index = (v_turn_index + 1) % speedSamples;
-  float sum = 0;
-  for (int i = 0; i < speedSamples; i++) {
-    sum += v_turn_history[i];
+void updateSpeed() {  // called every 100 ms; real time stamps because the loop rate is not constant
+  unsigned long now = millis();
+  v_pos[v_index] = azimut_abs;
+  v_time[v_index] = now;
+  v_index = (v_index + 1) % speedSamples;
+  if (v_filled < speedSamples) v_filled++;
+  if (!b_turning || v_filled < 2) {
+    v_turn = 0;
+    return;
   }
-
-  return sum / speedSamples;
+  int oldest = (v_filled == speedSamples) ? v_index : 0;
+  float dt = (now - v_time[oldest]) / 1000.0f;
+  v_turn = dt > 0.2f ? (azimut_abs - v_pos[oldest]) / dt : 0;
 }
 
 void glitchalarm() { // this switches off the alarm LED and gives a Display message for a short time
@@ -474,10 +485,17 @@ void glitchalarm() { // this switches off the alarm LED and gives a Display mess
 }
 
 void drawAngleScale(int angle) { // Here we draw the big sprite with the angle scale
-  if (angle == angle_old) {
+  static int tgt_old = -2;
+  int tgtKey = b_autorotate ? azimut_tar : -1;  // absolute target, -1 = none
+  if (angle == angle_old && tgtKey == tgt_old) {
     return;
-  } else {
-    angle_old = angle;
+  }
+  angle_old = angle;
+  tgt_old = tgtKey;
+  int markDx = 0;  // target position relative to the pointer in pixels
+  if (tgtKey >= 0) {
+    int absShown = angle >= 180 ? angle - 180 : angle + 180;
+    markDx = (tgtKey - absShown) * 3;
   }
   const uint16_t centerColor = TFT_NAVY;  // Farbe in der Mitte
   const uint16_t edgeColor = TFT_BLACK;   // Farbe am Rand
@@ -552,6 +570,21 @@ void drawAngleScale(int angle) { // Here we draw the big sprite with the angle s
       if (direction) {
         spr.drawString(direction, xPos, centerY + textHeight - yo, textSize);
       }
+    }
+  }
+
+  if (tgtKey >= 0) {
+    const uint16_t tc = TFT_YELLOW;
+    int cy = centerY - yo;
+    if (markDx > 150) {
+      spr.fillTriangle(315, cy, 307, cy - 6, 307, cy + 6, tc);
+    } else if (markDx < -150) {
+      spr.fillTriangle(4, cy, 12, cy - 6, 12, cy + 6, tc);
+    } else {
+      int mx = centerX + markDx;
+      spr.drawLine(mx, 8 - yo, mx, scaleH - 9 - yo, tc);
+      spr.fillTriangle(mx - 5, 1 - yo, mx + 5, 1 - yo, mx, 8 - yo, tc);
+      spr.fillTriangle(mx - 5, scaleH - 2 - yo, mx + 5, scaleH - 2 - yo, mx, scaleH - 9 - yo, tc);
     }
   }
 
@@ -856,15 +889,24 @@ void tft_update() {
   }
 
   int show = roundedAzimuth();
-  int speed = (int)v_turn;
-  if (speed < 0) speed = 0;
+  int speed = (int)lroundf(fabsf(v_turn));
   if (speed > 999) speed = 999;
-  if (show == lastShownAngle && speed == lastShownSpeed) {
+  int tgtKey = b_autorotate ? azimut_tar : -1;
+  uint16_t angCol = TFT_WHITE;  // amber near the end stops, red right at them
+  if ((az_max_digit - az_min_digit) >= 400) {
+    float toEnd = min(azimut_abs, 360.0f - azimut_abs);
+    if (toEnd <= 3.0f) angCol = TFT_RED;
+    else if (toEnd <= 15.0f) angCol = TFT_ORANGE;
+  }
+  if (show == lastShownAngle && speed == lastShownSpeed && tgtKey == lastShownTgt && angCol == lastShownCol) {
     drawLinkStatus();
+    drawFooterAlert();
     return;
   }
   lastShownAngle = show;
   lastShownSpeed = speed;
+  lastShownTgt = tgtKey;
+  lastShownCol = angCol;
 
   spr_angle.setTextDatum(TL_DATUM);
   spr_angle.setTextPadding(0);
@@ -885,24 +927,46 @@ void tft_update() {
   char speedTxt[8];
   snprintf(speedTxt, sizeof(speedTxt), "%3d", speed);
 
-  int x = 2;
-  spr_angle.drawString("Angle", x, 6, 2);
-  x += spr_angle.textWidth("Angle", 2) + 4;
+  static const char *const compass8[8] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+  const char *dir8 = compass8[((show + 22) / 45) % 8];
+
+  spr_angle.setTextDatum(TL_DATUM);
+  spr_angle.setTextColor(TFT_MIDGREY, TFT_BLACK);
+  int x = 4;
+  spr_angle.drawString("Angle", x, 7, 2);
+  x += spr_angle.textWidth("Angle", 2) + 6;
+  spr_angle.setTextColor(angCol, TFT_BLACK);
   for (int i = 0; angleTxt[i]; i++) {
     drawFixedCell(spr_angle, angleTxt[i], x, digitW);
     x += digitW + 1;
   }
-  x += 8;
-  spr_angle.drawString("Speed", x, 6, 2);
-  x += spr_angle.textWidth("Speed", 2) + 4;
+  spr_angle.drawCircle(x + 4, 5, 3, angCol);  // degree sign, the font has none
+
+  spr_angle.setTextDatum(TC_DATUM);
+  spr_angle.setTextColor(TFT_CYAN, TFT_BLACK);
+  spr_angle.drawString(dir8, 156, 0, 4);
+  spr_angle.setTextDatum(TL_DATUM);
+
+  int xr = 316;  // right block is laid out from the right edge
+  spr_angle.setTextColor(TFT_MIDGREY, TFT_BLACK);
+  xr -= spr_angle.textWidth("/s", 2);
+  spr_angle.drawString("/s", xr, 7, 2);
+  spr_angle.drawCircle(xr - 4, 9, 2, TFT_MIDGREY);
+  xr -= 9;
+  xr -= 3 * (digitW + 1);
+  spr_angle.setTextColor(TFT_WHITE, TFT_BLACK);
+  int sx = xr;
   for (int i = 0; speedTxt[i]; i++) {
-    drawFixedCell(spr_angle, speedTxt[i], x, digitW);
-    x += digitW + 1;
+    drawFixedCell(spr_angle, speedTxt[i], sx, digitW);
+    sx += digitW + 1;
   }
+  spr_angle.setTextColor(TFT_MIDGREY, TFT_BLACK);
+  spr_angle.drawString("Speed", xr - 4 - spr_angle.textWidth("Speed", 2), 7, 2);
 
   spr_angle.pushSprite(0, 180);
   drawAngleScale(show);
   drawLinkStatus();
+  drawFooterAlert();
 }
 
 void GetStoredSetup() {
@@ -1050,7 +1114,9 @@ void drawMainScreen() {
   angle_old = -1000;
   lastShownAngle = -1;
   lastShownSpeed = -1;
+  lastShownTgt = -2;
   lastFooterKey = 0xFFFFFFFF;
+  lastLeftKey = 0xFFFFFFFF;
   glitchMsgUntil = 0;
   if (!spr.created()) {
     spr.deleteSprite();
@@ -1067,6 +1133,7 @@ void drawMainScreen() {
   tft.drawRoundRect(0, 0, 105, 35, 4, TFT_WHITE);
   tft.drawRoundRect(110, 0, 100, 35, 4, TFT_WHITE);
   tft.drawRoundRect(215, 0, 105, 35, 4, TFT_WHITE);
+  tft.drawFastHLine(0, 210, 320, TFT_DARKGREY);
   display_rotation_arrow();
   tft_update();
 }
@@ -1110,15 +1177,38 @@ static void drawWifiIcon(int cx, int cy, bool connected, int bars, uint16_t colo
   drawFanArc(cx, cy, 16, (connected && bars >= 3) ? color : dim);
 }
 
+static void drawRcIcon(int x, int y, bool connected) {  // small monitor: filled green while a rotctld client is connected
+  uint16_t col = connected ? TFT_GREEN : TFT_DARKGREY;
+  tft.drawRoundRect(x, y, 18, 12, 2, col);
+  if (connected) tft.fillRect(x + 3, y + 3, 12, 6, col);
+  tft.drawFastVLine(x + 9, y + 12, 3, col);
+  tft.drawFastHLine(x + 4, y + 15, 10, col);
+}
+
 void drawFooterAlert() {
   if (menuOpen) return;
+  bool glitch = glitchMsgUntil && millis() < glitchMsgUntil;
+  bool wifiUp = linkWantsWifi() && WiFi.status() == WL_CONNECTED;
+  int target = (azimut_tar + 180) % 360;
+  uint32_t ipv = wifiUp ? (uint32_t)WiFi.localIP() : 0;
+  uint32_t key = (msgStuck ? 1u : 0u) | (glitch ? 2u : 0u) | (wifiUp ? 4u : 0u) | (b_autorotate ? 8u : 0u) | ((uint32_t)target << 4);
+  if (key == lastLeftKey && ipv == lastLeftIp) return;
+  lastLeftKey = key;
+  lastLeftIp = ipv;
   tft.fillRect(0, FOOT_Y, FOOT_MSG_W, FOOT_H, TFT_BLACK);
   tft.setTextDatum(TL_DATUM);
-  tft.setTextColor(TFT_RED, TFT_BLACK);
-  if (msgStuck) {
-    tft.drawString("ROTOR STUCK!", 6, FOOT_Y + 5, 2);
-  } else if (glitchMsgUntil && millis() < glitchMsgUntil) {
-    tft.drawString("SENSOR GLITCH", 6, FOOT_Y + 5, 2);
+  if (msgStuck || glitch) {
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.drawString(msgStuck ? "ROTOR STUCK!" : "SENSOR GLITCH", 6, FOOT_Y + 5, 2);
+  } else if (b_autorotate) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "Goto %d", target);
+    tft.setTextColor(TFT_CYAN, TFT_BLACK);
+    int w = tft.drawString(buf, 6, FOOT_Y + 5, 2);
+    tft.drawCircle(6 + w + 4, FOOT_Y + 8, 2, TFT_CYAN);
+  } else if (wifiUp) {
+    tft.setTextColor(TFT_MIDGREY, TFT_BLACK);
+    tft.drawString(WiFi.localIP().toString(), 6, FOOT_Y + 5, 2);
   }
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
 }
@@ -1132,10 +1222,12 @@ void drawLinkStatus() {
   int st = wifiOn ? (int)WiFi.status() : (int)WL_DISCONNECTED;
   bool wifiOk = (st == WL_CONNECTED);
   int bars = wifiOk ? wifiRssiBars() : 0;
+  bool rcOn = wifiOn && rotctlListening();
+  bool rcCli = rcOn && rotctlClientConnected();
 
   uint32_t key = (btOn ? 1u : 0u) | (btCli ? 2u : 0u) | (wifiOn ? 4u : 0u) |
                  (wifiOk ? 8u : 0u) | ((uint32_t)(bars & 3) << 4) |
-                 ((uint32_t)st << 8);
+                 ((uint32_t)st << 8) | (rcOn ? 1u << 16 : 0u) | (rcCli ? 1u << 17 : 0u);
   if (key == lastFooterKey) return;
   lastFooterKey = key;
 
@@ -1148,6 +1240,10 @@ void drawLinkStatus() {
     else if (!wifiOk) col = TFT_YELLOW;
     x -= 34;
     drawWifiIcon(x + 16, FOOT_Y + 20, wifiOk, bars, col);
+    if (rcOn) {
+      x -= 24;
+      drawRcIcon(x, FOOT_Y + 5, rcCli);
+    }
   }
   if (btOn) {
     x -= 22;

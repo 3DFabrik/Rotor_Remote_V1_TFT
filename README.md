@@ -1,10 +1,10 @@
 # Rotor Remote
 
-Ein Umbau für ein vorhandenes CDE-Steuergerät. Die bisherige Steuerung wird aus dem Gehäuse entfernt. Es verbleiben das Netzteil für den Rotor und der Phasenkondensator. Die Steuerung übernimmt ein ESP32: er zeigt den Kompasswinkel auf einem Farbdisplay, drei Taster drehen von Hand, und hamlib spricht den Rotor über WLAN an. Dieselbe Steuerung gibt es über USB und Bluetooth.
+Ein Umbau für ein vorhandenes CDE-Steuergerät. Die bisherige Steuerung wird aus dem Gehäuse entfernt. Es verbleiben das Netzteil für den Rotor und der Phasenkondensator. Die Steuerung übernimmt ein ESP32: er zeigt den Kompasswinkel auf einem Farbdisplay, drei Taster drehen von Hand, und hamlib spricht den Rotor über WLAN an. Eine Weboberfläche bedient ihn vom Handy oder PC aus und rechnet auf Wunsch ein Rufzeichen aus Wavelog in einen Kompasswinkel um. Dieselbe Steuerung gibt es über USB und Bluetooth.
 
 ![Front des umgebauten CDE-Steuergeräts. Das Display ist an und zeigt Winkel und Geschwindigkeit.](Pictures/Front.png)
 
-Die Firmware-Version steht im Systemmenü. Im Quelltext heißt sie `FW_VERSION` in `RotorTypes.h`.
+Die Firmware-Version steht beim Start auf dem Display, im Systemmenü und im Kopf der Weboberfläche. Im Quelltext heißt sie `FW_VERSION` in `RotorTypes.h`.
 
 ## Was dazugehört
 
@@ -48,7 +48,7 @@ Auf der Hauptseite drehen **CCW** und **CW**, solange der Taster gehalten wird. 
 
 Alles bleibt im Speicher unter dem Namen `RotorRemote`.
 
-### Hauptseite
+### Hauptseite am Display
 
 Nach dem Einschalten zeigt das Display kurz Name, Firmware-Version und Link-Modus. Danach folgt die Hauptseite:
 
@@ -70,11 +70,13 @@ Die Auto-Kalibrierung erkennt den Anschlag an der Geschwindigkeit: 3 Sekunden un
 
 Die Bremse zieht zuerst an, der Motor folgt nach 250 ms. Nach dem Stopp bleibt die Bremse noch 1 Sekunde angezogen.
 
+**BRK ist der Notstopp.** Solange BRK gedrückt ist, steht der Rotor, egal ob Taster, Weboberfläche, rotctld, Bluetooth oder eine Autorotation ihn bewegt hat. Im Kalibriermenü stoppt ein BRK-Druck eine laufende Fahrt, und das Loslassen löst keine Menüauswahl aus, damit die Auto-Kalibrierung nicht neu startet. Nach dem Loslassen fährt nichts von allein weiter.
+
 Der Overshoot von 0 bis 9 ° lässt die Autorotation etwas vor dem Ziel stehen.
 
 ## Winkel
 
-Der ADC wird jede Millisekunde gelesen.
+Der ADC wird bei jedem Durchlauf der Hauptschleife gelesen, also alle paar Millisekunden. Die Schleife läuft nicht mit festem Takt, je nach WLAN-Last dauert ein Durchlauf länger.
 
 1. Ein laufender Median nimmt kurze Spikes des Drahtpotis weg. Die Länge wird im Systemmenü eingestellt, von 3 bis 255. Der Startwert ist 100 und bleibt gespeichert. Bei einer geraden Länge mittelt das Programm die beiden mittleren Samples.
 2. Ein Kalman-Filter glättet daraus den angezeigten Winkel. Im Stand, solange die Bremse offen ist, ist dieser Filter zehnmal stärker. Während der Fahrt bleibt er leicht, damit das Ziel rechtzeitig gemeldet wird.
@@ -86,7 +88,7 @@ Weichen Rohwert und Median während der Fahrt um 300 Digits oder mehr voneinande
 
 ## rotctld
 
-Bei verbundenem WLAN hört der Controller auf TCP-Port 4533, sofern im Menü nichts anderes steht. Es ist immer nur ein Client verbunden. Ein neuer Client übernimmt die Verbindung.
+Bei verbundenem WLAN hört der Controller auf TCP-Port 4533, sofern im Menü nichts anderes steht. Es ist immer nur ein Client verbunden. Ein neuer Client übernimmt die Verbindung. Programme mit Hamlib-Anbindung, zum Beispiel PSTRotator, steuern den Rotor darüber. Das Anfahren per Rufzeichen aus Wavelog läuft über die Weboberfläche, siehe unten.
 
 | Befehl | Wirkung |
 | --- | --- |
@@ -121,11 +123,62 @@ Dieselben Kurzbefehle gehen an USB-Serial mit 115200 Baud und an Bluetooth. Die 
 | `V` | Gespeicherte Werte |
 | `?` | Hilfe |
 
+## Weboberfläche
+
+Im Browser `http://<ip>/` öffnet die Weboberfläche des Controllers. Sie braucht WLAN und läuft ohne Anmeldung. Wer im Netz ist, kann den Rotor bedienen. Die Seite hat drei Reiter: **Home**, **Wavelog** und **Update**. Im Kopf steht die Firmware-Version.
+
+### Home
+
+- **Status:** Azimut, Fahrtrichtung, Zielwinkel, freier Speicher und die Adresse des rotctld-Servers. Ein Abzeichen zeigt, ob ein rotctld-Client verbunden ist. Die Seite fragt den Controller alle 0,8 Sekunden ab.
+- **Kompass:** Ein roter Pfeil zeigt den Kompasswinkel. Bei einer Autorotation markiert eine gelbe Marke das Ziel.
+- **CCW und CW:** Der Rotor dreht, solange die Taste gehalten wird. Beim Loslassen, beim Wechsel des Fensters oder der Seite und beim Abbruch der Verbindung stoppt er. Der Controller stoppt auch von allein, wenn 0,5 Sekunden kein Signal der Taste kommt.
+- **Winkel, GO und STOP:** Ein Zielwinkel von 0 bis 359 ° mit **GO** startet eine Autorotation, **STOP** hält sie an. GO wird mit „busy“ abgelehnt, solange schon eine Fahrt läuft, das Menü offen ist, kalibriert wird oder BRK gedrückt ist.
+- **Rufzeichen oder Locator:** Ein Feld mit **FIND** und „long path“ rechnet das Ziel in einen Winkel um. Siehe den Abschnitt Wavelog.
+- **Log:** Die letzten Befehle von rotctld und Weboberfläche, der Blockade-Alarm und BRK-Notstopps mit Datum und Uhrzeit.
+
+Es darf immer nur ein Client fahren. Eine Fahrt startet nur mit einem frischen Tastendruck. Ein verspätetes Signal eines hängenden Browsers startet nach einem Stopp nichts neu. Ein Druck in Gegenrichtung während der Fahrt stoppt, statt umzukehren, und ein Stopp wird von jedem Client angenommen. BRK am Gerät hat immer Vorrang, und die weichen Enden gelten auch hier.
+
+| Pfad | Zweck |
+| --- | --- |
+| `GET /` | Home |
+| `GET /wavelog` | Einstellungen für Wavelog |
+| `GET /update`, `POST /update` | Update-Seite, Firmware hochladen |
+| `GET /status` | Status als JSON: `az`, `target`, `turning`, `auto`, `speed`, `dir`, `debug`, `client`, `heap`, `maxblk`, `ver`, `ip`, `port`, `log` |
+| `POST /jog` | `dir=ccw`, `cw` oder `stop`. `start=1` kennzeichnet einen neuen Tastendruck, ohne `start` hält die Anfrage nur eine laufende Fahrt am Leben. |
+| `POST /go` | `az=0..359` startet eine Autorotation, `stop=1` hält sie an |
+| `GET /wl.json`, `POST /wl` | Einstellungen für Wavelog lesen und speichern |
+
+### Wavelog: Rufzeichen anfahren
+
+Die Weboberfläche rechnet ein Rufzeichen oder einen Maidenhead-Locator in einen Kompasswinkel um. Das Rufzeichen schlägt der Browser in Wavelog nach. Der Controller selbst spricht nicht mit Wavelog. Nötig ist Wavelog ab Version 3.1.0 mit der REST-API v2.
+
+**Einrichten**
+
+1. In Wavelog im Benutzermenü unter **API** einen **API-v2-Token** erzeugen. Er braucht die Rechte `lookup:read` und `station:read`. Der Token beginnt mit `wl2_` und wird nur einmal angezeigt.
+2. In der Weboberfläche den Reiter **Wavelog** öffnen. Dort stehen die **URL** der Instanz (`https://log.example.com`, die Form `https://log.example.com/index.php/api/v2` wird ebenfalls verstanden), der **Token** und optional dein eigener **Locator**. Bleibt der Locator leer, nimmt die Seite den der aktiven Wavelog-Station.
+3. **Save** speichert die Werte im Controller. **Test** prüft nacheinander Token, Station und Lookup und zeigt zum Beispiel `token ok, station JO30OO, lookup ok`. Fehlt dem Token ein Recht, nennt Wavelog es in der Meldung.
+
+**Benutzen**
+
+Auf **Home** ein Rufzeichen (`DL1ABC`) oder einen Locator (`JN48`) in das Feld eintragen und **FIND** drücken. Die Seite zeigt Ziel, Winkel und Entfernung und trägt den Winkel in das Winkelfeld ein. „long path“ rechnet den langen Weg. Gedreht wird erst, wenn du **GO** drückst.
+
+Woher der Standort kommt:
+
+- Ein Locator mit 4, 6 oder 8 Stellen wird direkt umgerechnet, ohne Wavelog. Die Rechnung nimmt die Mitte des Feldes.
+- Bei einem Rufzeichen liefert Wavelog den Locator des Eintrags, sofern ein Callbook eingerichtet ist oder das Rufzeichen schon im Logbuch steht.
+- Fehlt der Locator, nimmt die Seite die Landesmitte des DXCC-Gebiets und markiert das Ergebnis mit „(country centre)“. Das ist nur eine grobe Richtung.
+
+Der Winkel ist der Kompasswinkel wie bei rotctld.
+
+Hinweise:
+
+- URL und Token liegen im Flash des Controllers. Jeder, der die Seite öffnen kann, kann den Token lesen. Vergib deshalb nur die beiden Leserechte. Bei einem Verdacht den Token in Wavelog widerrufen.
+- Die Abfrage läuft im Browser. Handy oder PC müssen die Wavelog-Instanz erreichen. Die API v2 erlaubt dafür Zugriffe von anderen Seiten (CORS).
+- Der Controller selbst braucht dafür keine Verbindung zu Wavelog.
+
 ## Update über WLAN
 
-Im Browser `http://<ip>/` zeigt die Startseite den aktuellen Winkel, die Fahrtrichtung, einen Kompass mit Zeiger und Zielmarke, ein Abzeichen für den rotctld-Client, Taster für CCW und CW, ein Feld für einen Zielwinkel (0–359) mit GO und STOP und eine Liste der letzten Befehle mit Datum und Uhrzeit. Der Reiter **Update** startet das Firmware-Update. Nach dem Neustart öffnet sich die Startseite wieder und zeigt die neue Firmware-Version. Hochgeladen wird `firmware/RotorRemote_ota.bin`. Die Datei `RotorRemote.bin` ist das USB-Abbild.
-
-Rufzeichen und Locator: Unter der Winkeleingabe nimmt ein Feld ein Rufzeichen oder einen Maidenhead-Locator. **FIND** berechnet den Kompasswinkel von deinem Locator zum Ziel und trägt ihn in das Winkelfeld ein. Gedreht wird erst mit GO. „long path“ nimmt den langen Weg. Ein Rufzeichen fragt der Browser über die Wavelog-API v2 (`/lookup`) ab. Daraus kommt der Locator des Eintrags, sonst die Landesmitte, die mit „country centre“ markiert ist. Auf dem Reiter **Wavelog** stehen dafür die URL der Wavelog-Instanz, ein API-v2-Token mit den Rechten `lookup:read` und `station:read` und optional dein Locator. Ohne Locator nimmt die Seite den der aktiven Wavelog-Station. Die Werte stehen im Speicher des Controllers. Der Token ist für jeden sichtbar, der die Seite im Netz öffnen kann. **Test** prüft Token, Station und Lookup.
+Der Reiter **Update** lädt die Firmware hoch. Hochgeladen wird `firmware/RotorRemote_ota.bin`. Nach dem Neustart öffnet sich die Startseite wieder und zeigt die neue Firmware-Version. Die Datei `RotorRemote.bin` ist das USB-Abbild.
 
 Die Update-Seite lässt den Controller in Ruhe, bis die Datei gesendet wird. Dann zeigt das Display „Updating...“ mit Fortschrittsbalken und Prozentanzeige, und rotctld wird getrennt. Nach dem Schreiben erscheint „Update OK“ und der Neustart. Bricht der Upload ab, erscheint „Update failed“ mit dem Grund, und der Controller startet neu. Fällt das WLAN dabei weg, startet er nach ein paar Sekunden ebenfalls neu.
 
@@ -150,7 +203,7 @@ In beiden Fällen wird die Version beim Bau als `FW_VERSION` eingesetzt; der Que
 
 ## Bauen
 
-Arduino CLI mit Core `esp32:esp32` 3.3.7. TFT_eSPI und RunningMedian liegen im Ordner `libraries`.
+Arduino CLI mit Core `esp32:esp32` 3.3.7. TFT_eSPI und RunningMedian liegen im Ordner `libraries`. Der Sketch-Ordner muss so heißen wie die Hauptdatei, also `Rotor_Remote_V1_TFT` (Hauptdatei `Rotor_Remote_V1_TFT.ino`), sonst findet Arduino CLI sie nicht.
 
 ```text
 arduino-cli compile --libraries libraries --output-dir firmware .

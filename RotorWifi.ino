@@ -166,7 +166,11 @@ bool otaIsBusy() {
   ".jog button{font-size:15px;padding:10px 16px;background:#246;color:#fff;border:0;border-radius:8px;touch-action:none;" \
   "user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}" \
   ".jog button:active{background:#3a7}" \
-  ".jog input{width:84px;font-size:16px;padding:9px;background:#0d1117;color:#eee;border:1px solid #345;border-radius:6px}" \
+  ".jog input:not([type=checkbox]){width:84px;font-size:16px;padding:9px;background:#0d1117;color:#eee;border:1px solid #345;border-radius:6px}" \
+  ".jog #tcall{width:150px;text-transform:uppercase}.jog label{color:#9ab;font-size:14px}" \
+  ".tx{background:#0d1117;color:#eee;border:1px solid #345;border-radius:6px;padding:9px;font-size:16px}" \
+  ".wide{width:100%;max-width:420px;box-sizing:border-box}" \
+  ".btn{font-size:15px;padding:10px 16px;background:#246;color:#fff;border:0;border-radius:8px}" \
   ".jog #go{background:#2a7}.jog #stp{background:#a33}" \
   "input[type=file]{display:block;margin:16px 0}" \
   "input[type=submit]{font-size:16px;padding:10px 18px;background:#246;color:#fff;border:0;border-radius:6px}"
@@ -180,7 +184,7 @@ bool otaIsBusy() {
 
 // Served from flash so no heap is needed to build the page.
 static const char HOME_PAGE[] PROGMEM =
-  PAGE_HEAD("<a class='on' href='/'>Home</a><a href='/update'>Update</a>")
+  PAGE_HEAD("<a class='on' href='/'>Home</a><a href='/wavelog'>Wavelog</a><a href='/update'>Update</a>")
   "<p>rotctld: <span id='addr'>-</span> <span id='badge' class='badge'>no client</span></p>"
   "<div class='top'><div class='cards'>"
   "<div class='card'><h2>Azimuth</h2><div class='big' id='az'>-</div></div>"
@@ -197,6 +201,9 @@ static const char HOME_PAGE[] PROGMEM =
   "<input id='gaz' type='number' inputmode='numeric' min='0' max='359' placeholder='0-359'>"
   "<button id='go' type='button'>GO</button><button id='stp' type='button'>STOP</button>"
   "<span id='gmsg' class='note'></span></div>"
+  "<div class='jog'><input id='tcall' type='text' autocapitalize='characters' autocomplete='off' spellcheck='false' placeholder='Call or locator'>"
+  "<button id='fnd' type='button'>FIND</button><label><input id='lp' type='checkbox'> long path</label>"
+  "<span id='tinfo' class='note'></span></div>"
   "<h2>rotctld / debug</h2>"
   "<select class='log' id='log' size='12'></select>"
   "<script>"
@@ -233,10 +240,44 @@ static const char HOME_PAGE[] PROGMEM =
   "go.onclick=()=>{const v=gaz.value.trim();if(!/^\\d{1,3}$/.test(v)||+v>359){say('0-359');gaz.focus();return;}send2('az='+v);};"
   "stp.onclick=()=>send2('stop=1');"
   "gaz.addEventListener('keydown',e=>{if(e.key=='Enter')go.click();});"
+  "const LOC=/^[A-R]{2}\\d\\d([A-X]{2}(\\d\\d)?)?$/i;"
+  "function l2ll(g){g=g.toUpperCase();let lon=(g.charCodeAt(0)-65)*20-180,lat=(g.charCodeAt(1)-65)*10-90,w=2,h=1;"
+  "lon+=+g[2]*2;lat+=+g[3];"
+  "if(g.length>=6){w=2/24;h=1/24;lon+=(g.charCodeAt(4)-65)*w;lat+=(g.charCodeAt(5)-65)*h;"
+  "if(g.length==8){w/=10;h/=10;lon+=+g[6]*w;lat+=+g[7]*h;}}"
+  "return[lat+h/2,lon+w/2];}"
+  "function brg(a,b){const r=Math.PI/180,f1=a[0]*r,f2=b[0]*r,dl=(b[1]-a[1])*r;"
+  "return(Math.atan2(Math.sin(dl)*Math.cos(f2),Math.cos(f1)*Math.sin(f2)-Math.sin(f1)*Math.cos(f2)*Math.cos(dl))/r+360)%360;}"
+  "function dst(a,b){const r=Math.PI/180,dp=(b[0]-a[0])*r,dl=(b[1]-a[1])*r;"
+  "const h=Math.sin(dp/2)**2+Math.cos(a[0]*r)*Math.cos(b[0]*r)*Math.sin(dl/2)**2;return 12742*Math.asin(Math.sqrt(h));}"
+  "function wb(u){return u.replace(/\\/+$/,'').replace(/\\/api\\/v2$/,'').replace(/\\/index\\.php$/,'')+'/index.php/api/v2';}"
+  "async function wl(S,path){const r=await fetch(wb(S.url)+'/'+path,{headers:{'Authorization':'Bearer '+S.key}});"
+  "if(!r.ok){let m='Wavelog answered '+r.status;try{const e=await r.json();if(e.error)m=e.error.message||e.error.code;}catch(_){}throw new Error(m);}"
+  "return(await r.json()).data;}"
+  "fnd.onclick=async()=>{try{tinfo.textContent='...';"
+  "const S=await(await fetch('/wl.json',{cache:'no-store'})).json();"
+  "const q=tcall.value.trim().toUpperCase();if(!q)throw new Error('Enter a call or locator');"
+  "let ll,lab=q,approx=false;"
+  "if(LOC.test(q)){ll=l2ll(q);}else{"
+  "if(!S.url||!S.key)throw new Error('Set URL and token on the Wavelog tab');"
+  "const j=await wl(S,'lookup?callsign='+encodeURIComponent(q)+'&detail=full&callbook=true');"
+  "const cb=j.callbook||{};const g=[j.gridsquare,cb.gridsquare,cb.grid,cb.locator].find(x=>x&&LOC.test(x));"
+  "if(g){ll=l2ll(g);lab=q+' '+g;}"
+  "else if(isFinite(parseFloat(j.dxcc_lat))&&isFinite(parseFloat(j.dxcc_long))){ll=[+j.dxcc_lat,+j.dxcc_long];approx=true;}"
+  "else throw new Error('No location for '+q);}"
+  "let me=S.loc;if(!me){if(!S.url||!S.key)throw new Error('Own locator missing');"
+  "const st=await wl(S,'station');const a=st.find(x=>x.active)||st[0];me=a&&a.gridsquare;}"
+  "if(!me||!LOC.test(me))throw new Error('Own locator unknown');"
+  "const own=l2ll(me);let b=brg(own,ll),d=dst(own,ll);"
+  "if(lp.checked){b=(b+180)%360;d=40030-d;}"
+  "const az=Math.round(b)%360;gaz.value=az;"
+  "tinfo.textContent=lab+(approx?' (country centre)':'')+': '+az+'\\u00b0, '+Math.round(d)+' km'+(lp.checked?' long path':'')+'. Press GO.';"
+  "}catch(e){tinfo.textContent=(e instanceof TypeError)?'No answer from Wavelog (URL or CORS)':e.message;}};"
+  "tcall.addEventListener('keydown',e=>{if(e.key=='Enter')fnd.click();});"
   "</script></main></body></html>";
 
 static const char UPDATE_PAGE[] PROGMEM =
-  PAGE_HEAD("<a href='/'>Home</a><a class='on' href='/update'>Update</a>")
+  PAGE_HEAD("<a href='/'>Home</a><a href='/wavelog'>Wavelog</a><a class='on' href='/update'>Update</a>")
   "<h2>Firmware update</h2>"
   "<p>Use <strong>RotorRemote_ota.bin</strong> (app image). Do not upload the USB merged <strong>RotorRemote.bin</strong>.</p>"
   "<form method='POST' action='/update' enctype='multipart/form-data'>"
@@ -248,7 +289,48 @@ static const char UPDATE_PAGE[] PROGMEM =
   "<script>fetch('/status').then(r=>r.json()).then(s=>{document.getElementById('ver').textContent=s.ver}).catch(()=>{});</script>"
   "</main></body></html>";
 
+static const char WAVELOG_PAGE[] PROGMEM =
+  PAGE_HEAD("<a href='/'>Home</a><a class='on' href='/wavelog'>Wavelog</a><a href='/update'>Update</a>")
+  "<h2>Wavelog</h2>"
+  "<p class='note'>Used on the Home page to find a callsign and turn the rotor towards it. "
+  "In Wavelog create an <strong>API v2 token</strong> (user menu, API) with the scopes <strong>lookup:read</strong> and "
+  "<strong>station:read</strong>. The token is stored in this controller and is visible to anyone who can open this page.</p>"
+  "<p>URL<br><input id='wu' class='tx wide' type='text' placeholder='https://log.example.com' autocomplete='off'></p>"
+  "<p>API v2 token (wl2_...)<br><input id='wk' class='tx wide' type='password' autocomplete='off'></p>"
+  "<p>Own locator (empty = taken from the active Wavelog station)<br>"
+  "<input id='wloc' class='tx' type='text' maxlength='8' placeholder='JO30oo' autocomplete='off'></p>"
+  "<p><button id='sv' class='btn' type='button'>Save</button> <button id='ts' class='btn' type='button'>Test</button> "
+  "<span id='wm' class='note'></span></p>"
+  "<script>"
+  "fetch('/status').then(r=>r.json()).then(s=>{ver.textContent=s.ver}).catch(()=>{});"
+  "fetch('/wl.json',{cache:'no-store'}).then(r=>r.json()).then(s=>{wu.value=s.url;wk.value=s.key;wloc.value=s.loc;}).catch(()=>{});"
+  "sv.onclick=async()=>{try{const b='url='+encodeURIComponent(wu.value.trim())+'&key='+encodeURIComponent(wk.value.trim())"
+  "+'&loc='+encodeURIComponent(wloc.value.trim());"
+  "const r=await fetch('/wl',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b});"
+  "wm.textContent=r.ok?'saved':'rejected: check the characters in URL, key and locator';}catch(e){wm.textContent='no answer';}};"
+  "function wb(u){return u.replace(/\\/+$/,'').replace(/\\/api\\/v2$/,'').replace(/\\/index\\.php$/,'')+'/index.php/api/v2';}"
+  "async function wl(S,path){const r=await fetch(wb(S.url)+'/'+path,{headers:{'Authorization':'Bearer '+S.key}});"
+  "if(!r.ok){let m='Wavelog answered '+r.status;try{const e=await r.json();if(e.error)m=e.error.message||e.error.code;}catch(_){}throw new Error(m);}"
+  "return(await r.json()).data;}"
+  "ts.onclick=async()=>{try{wm.textContent='...';const S={url:wu.value.trim(),key:wk.value.trim()},out=[];"
+  "await wl(S,'token');out.push('token ok');"
+  "try{const st=await wl(S,'station');const a=st.find(x=>x.active)||st[0];out.push('station '+(a?a.gridsquare:'none'));}"
+  "catch(e){out.push('station: '+e.message);}"
+  "try{await wl(S,'lookup?callsign=DL1ABC&detail=basic');out.push('lookup ok');}catch(e){out.push('lookup: '+e.message);}"
+  "wm.textContent=out.join(', ');}"
+  "catch(e){wm.textContent='failed: '+e.message+(e instanceof TypeError?' (URL or network)':'');}};"
+  "</script></main></body></html>";
+
 static char statusJson[3072];
+
+static bool wlPlain(const String &s, size_t maxLen, const char *extra) {
+  if (s.length() > maxLen) return false;
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s.charAt(i);
+    if (!isalnum((unsigned char)c) && !strchr(extra, c)) return false;
+  }
+  return true;
+}
 
 static size_t statusAdd(size_t n, const char *s) {
   while (*s && n + 1 < sizeof(statusJson)) statusJson[n++] = *s++;
@@ -424,6 +506,33 @@ static void otaBegin() {
     }
     applyAzimuthTarget(v);
     webLog("web", (String("goto ") + v).c_str());
+    httpOta.send(200, "text/plain", "ok");
+  });
+
+  httpOta.on("/wavelog", HTTP_GET, []() {
+    httpOta.send_P(200, "text/html", WAVELOG_PAGE);
+  });
+
+  httpOta.on("/wl.json", HTTP_GET, []() {
+    String j = "{\"url\":\"" + preferences.getString("wl_url", "") + "\",\"key\":\"" + preferences.getString("wl_key", "") +
+               "\",\"loc\":\"" + preferences.getString("wl_loc", "") + "\"}";
+    httpOta.sendHeader("Cache-Control", "no-store");
+    httpOta.send(200, "application/json", j);
+  });
+
+  httpOta.on("/wl", HTTP_POST, []() {  // only plain characters are accepted, so the values can go into JSON unescaped
+    String url = httpOta.arg("url"), key = httpOta.arg("key"), loc = httpOta.arg("loc");
+    bool ok = wlPlain(url, 120, ":/._~%-?=&#+") && wlPlain(key, 80, "-_.") && wlPlain(loc, 8, "") &&
+              (url.length() == 0 || url.startsWith("http://") || url.startsWith("https://")) &&
+              (loc.length() == 0 || loc.length() == 4 || loc.length() == 6 || loc.length() == 8);
+    if (!ok) {
+      httpOta.send(400, "text/plain", "rejected");
+      return;
+    }
+    preferences.putString("wl_url", url);
+    preferences.putString("wl_key", key);
+    preferences.putString("wl_loc", loc);
+    webLog("web", "wavelog settings saved");
     httpOta.send(200, "text/plain", "ok");
   });
 

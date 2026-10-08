@@ -66,14 +66,18 @@ static void calSetStatus(const char *msg) {
   calStatus[sizeof(calStatus) - 1] = '\0';
 }
 
-static void calDrawStatus() {
-  if (strcmp(calStatus, lastCalStatus) == 0) return;
-  strncpy(lastCalStatus, calStatus, sizeof(lastCalStatus) - 1);
+static const char *menuHelp(int i);
+
+static void calDrawStatus() {  // status of a running calibration, otherwise the help for the selected row
+  const char *txt = calStatus[0] ? calStatus : menuHelp(menuSel);
+  if (!txt) txt = "";
+  if (strcmp(txt, lastCalStatus) == 0) return;
+  strncpy(lastCalStatus, txt, sizeof(lastCalStatus) - 1);
   lastCalStatus[sizeof(lastCalStatus) - 1] = '\0';
   tft.setTextDatum(TL_DATUM);
-  tft.setTextColor(calPhase == CAL_IDLE ? TFT_ORANGE : TFT_GREEN, TFT_BLACK);
+  tft.setTextColor(calStatus[0] ? (calPhase == CAL_IDLE ? TFT_ORANGE : TFT_GREEN) : TFT_MIDGREY, TFT_BLACK);
   tft.setTextPadding(320);
-  tft.drawString(calStatus, 8, 198, 2);  // stays clear of the hint line at y=222
+  tft.drawString(txt, 8, 198, 2);  // stays clear of the hint line at y=222
   tft.setTextPadding(0);
 }
 
@@ -452,6 +456,68 @@ static void menuDrawRow(int absIndex, bool live = false) {
   }
 }
 
+static const char *menuHelp(int i) {  // '|' splits two lines; pages with up to 7 rows have room for two
+  static const char *const setup[] = {
+    "Pick Bluetooth or Wi-Fi, never both.|The unit restarts when you leave.",
+    "Network name, password, address|and the rotctld port.",
+    "Turn Bluetooth on or off and set|the device name.",
+    "Set the end stops and overshoot.|Cal run finds both stops itself.",
+    "Version, spike filter, debug log|and restart.",
+    "Return to the main screen."};
+  static const char *const wlan[] = {
+    "Current Wi-Fi connection state", "Address the unit has right now", "Pick the network to join",
+    "Password of that network", "DHCP or static address (select)", "TCP port for rotctld clients",
+    "Save settings and connect now", "Return to the setup menu"};
+  static const char *const bt[] = {
+    "Switches the radio. Wi-Fi and BT|cannot run at the same time.",
+    "Name shown when pairing the|controller with a phone or PC.",
+    "Return to the setup menu."};
+  static const char *const cal[] = {
+    "Raw ADC, median and speed", "Runs until you select it again", "Runs until you select it again",
+    "Store position as CCW end stop", "Store position as CW end stop", "Stop this many degrees early",
+    "Drive to both stops, save ends", "Return to the setup menu"};
+  static const char *const sys[] = {
+    "Build date and time of the|running firmware.",
+    "Browser address for status page|and firmware update.",
+    "Spike filter: median of N samples.|Larger = calmer, but more lag.",
+    "On: network details are printed|on the USB serial port.",
+    "Reboot the controller.",
+    "Return to the setup menu."};
+  if (i < 0 || i >= menuCount()) return nullptr;
+  switch (menuPage) {
+    case MP_SETUP: return setup[i];
+    case MP_WLAN: return ipMode ? nullptr : wlan[i];
+    case MP_BT: return bt[i];
+    case MP_CAL: return cal[i];
+    case MP_SYS: return sys[i];
+    default: return nullptr;
+  }
+}
+
+static void menuDrawHelp() {
+  const char *t = menuHelp(menuSel);
+  int n = menuCount();
+  if (!t || n > 8) return;
+  bool two = n <= 7;
+  int y0 = two ? 174 : 198;
+  tft.fillRect(0, y0, 320, 220 - y0, TFT_BLACK);
+  if (two) tft.drawFastHLine(0, 175, 320, TFT_VDARKGREY);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextPadding(0);
+  tft.setTextColor(TFT_MIDGREY, TFT_BLACK);
+  const char *bar = strchr(t, '|');
+  if (!two || !bar) {
+    tft.drawString(t, 8, two ? 182 : 199, 2);
+    return;
+  }
+  char first[48];
+  size_t len = min((size_t)(bar - t), sizeof(first) - 1);
+  memcpy(first, t, len);
+  first[len] = '\0';
+  tft.drawString(first, 8, 182, 2);
+  tft.drawString(bar + 1, 8, 200, 2);
+}
+
 static void menuDrawList() {
   int n = menuCount();
   for (int i = 0; i < MENU_VIS; i++) {
@@ -460,6 +526,7 @@ static void menuDrawList() {
   menuClearLiveCache();
   lastCalStatus[0] = '\0';
   if (menuPage == MP_CAL) calDrawStatus();
+  else menuDrawHelp();
 }
 
 static void menuDrawHeaderIp(bool force) {
@@ -721,6 +788,8 @@ static void menuMove(int dir) {
   } else {
     menuDrawRow(oldSel);
     menuDrawRow(menuSel);
+    if (menuPage == MP_CAL) calDrawStatus();
+    else menuDrawHelp();
   }
 }
 
@@ -817,6 +886,7 @@ static void menuSelectWlan() {
         openCharEdit(ED_PASS, wifiPass, 63, MP_WLAN);
         break;
       case 4:
+        wifiCaptureCurrentIp();
         ipMode = 1;
         preferences.putInt("ip_mode", ipMode);
         menuDraw();

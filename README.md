@@ -38,7 +38,7 @@ AUX ist verdrahtet und als Ausgang gesetzt. Die Firmware schaltet ihn im normale
 
 ## Am Gerät
 
-Auf der Hauptseite drehen **CCW** und **CW**, solange der Taster gehalten wird. **BRK** drei Sekunden gedrückt öffnet das Menü. Im Menü wählen CCW und CW die Zeile. Ein kurzer Druck auf BRK bestätigt, drei Sekunden gehen eine Ebene zurück.
+Auf der Hauptseite drehen **CCW** und **CW**, solange der Taster gehalten wird. **BRK** drei Sekunden gedrückt öffnet das Menü. Im Menü wählen CCW und CW die Zeile. Ein kurzer Druck auf BRK bestätigt, drei Sekunden gehen eine Ebene zurück. Unter der Liste erklärt eine graue Hilfezeile die gewählte Zeile. Bei der Kalibrierung zeigt sie stattdessen den Fortschritt.
 
 - **Link** wählt Bluetooth oder WLAN, nie beides. Die Auswahl wird beim Verlassen des Menüs gespeichert, dann startet der Controller neu.
 - **Wi-Fi** nimmt SSID, Passwort, DHCP oder eine feste Adresse, Gateway, Maske, DNS und den rotctld-Port. Speichern verbindet neu. Steht der Link auf Bluetooth, merkt sich Speichern den Wechsel auf WLAN, der beim Verlassen des Menüs gilt.
@@ -52,7 +52,7 @@ Alles bleibt im Speicher unter dem Namen `RotorRemote`.
 
 Nach dem Einschalten zeigt das Display kurz Name, Firmware-Version und Link-Modus. Danach folgt die Hauptseite:
 
-- Oben stehen die Pfeile für CCW und CW und in der Mitte BRAKE.
+- Oben stehen die Pfeile für CCW und CW und in der Mitte der Bremsstatus: `BRAKE ON` im Stand, `BRAKE OFF` in Grün, solange die Bremse offen ist und der Rotor dreht.
 - Die Skala zeigt den Kompasswinkel. Läuft eine Autorotation, markiert ein gelber Strich das Ziel. Liegt es außerhalb der Skala, zeigt ein gelber Pfeil am Rand die Richtung.
 - Darunter stehen Winkel mit Himmelsrichtung und die Geschwindigkeit in °/s. Der Winkel wird orange, wenn er höchstens 15 ° vom Anschlag entfernt ist, und rot ab 3 °. Das gilt nur bei gültiger Kalibrierung. Das Bild wird im Stand alle 2 Sekunden erneuert, während der Fahrt alle 250 ms.
 - Die Fußzeile links zeigt die Alarme `ROTOR STUCK!` und `SENSOR GLITCH` in Rot. Sonst steht dort `Goto <Winkel>` während einer Autorotation, im Stand bei WLAN die IP-Adresse.
@@ -123,7 +123,7 @@ Dieselben Kurzbefehle gehen an USB-Serial mit 115200 Baud und an Bluetooth. Die 
 
 ## Update über WLAN
 
-Im Browser `http://<ip>/` zeigt die Startseite den aktuellen Winkel, die Fahrtrichtung, einen Kompass mit Zeiger und Zielmarke, ein Abzeichen für den rotctld-Client, Taster für CCW und CW und eine Liste der letzten Befehle mit Datum und Uhrzeit. Der Reiter **Update** startet das Firmware-Update. Nach dem Neustart öffnet sich die Startseite wieder und zeigt die neue Firmware-Version. Hochgeladen wird `firmware/RotorRemote_ota.bin`. Die Datei `RotorRemote.bin` ist das USB-Abbild.
+Im Browser `http://<ip>/` zeigt die Startseite den aktuellen Winkel, die Fahrtrichtung, einen Kompass mit Zeiger und Zielmarke, ein Abzeichen für den rotctld-Client, Taster für CCW und CW, ein Feld für einen Zielwinkel (0–359) mit GO und STOP und eine Liste der letzten Befehle mit Datum und Uhrzeit. Der Reiter **Update** startet das Firmware-Update. Nach dem Neustart öffnet sich die Startseite wieder und zeigt die neue Firmware-Version. Hochgeladen wird `firmware/RotorRemote_ota.bin`. Die Datei `RotorRemote.bin` ist das USB-Abbild.
 
 Die Update-Seite lässt den Controller in Ruhe, bis die Datei gesendet wird. Dann zeigt das Display „Updating...“ mit Fortschrittsbalken und Prozentanzeige, und rotctld wird getrennt. Nach dem Schreiben erscheint „Update OK“ und der Neustart. Bricht der Upload ab, erscheint „Update failed“ mit dem Grund, und der Controller startet neu. Fällt das WLAN dabei weg, startet er nach ein paar Sekunden ebenfalls neu.
 

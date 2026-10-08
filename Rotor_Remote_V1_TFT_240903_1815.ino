@@ -210,6 +210,7 @@ void restartBluetooth();
 void wifiService();
 void rotctlService();
 void wifiConnectNow();
+bool wifiCaptureCurrentIp();
 void wifiStartScan();
 void wifiScanStop();
 bool wifiScanRunning();
@@ -742,14 +743,14 @@ void display_rotation_arrow() {
     drawArrow(225, 17, 85, 34, 0, TFT_VDARKGREY);  // Pfeil nach links (180 Grad)
   }
   tft.setTextDatum(MC_DATUM);
-  if (digitalRead(pin_out_BRK_relais) == HIGH) {
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.drawString("BRAKE", 160, 21, 4);
-  } else {
-    tft.setTextColor(TFT_VDARKGREY, TFT_BLACK);
-    tft.drawString("BRAKE", 160, 21, 4);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  }
+  bool brakeOff = digitalRead(pin_out_BRK_relais) == HIGH;  // relay energised = brake released
+  tft.setTextColor(brakeOff ? TFT_GREEN : TFT_MIDGREY, TFT_BLACK);
+  tft.setTextPadding(0);
+  tft.drawString("BRAKE", 160, 10, 2);
+  tft.setTextPadding(60);
+  tft.drawString(brakeOff ? "OFF" : "ON", 160, 26, 2);
+  tft.setTextPadding(0);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextDatum(TL_DATUM);
 }
 

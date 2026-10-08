@@ -162,10 +162,12 @@ bool otaIsBusy() {
   ".badge.on{background:#1a6;color:#fff}" \
   "select.log{width:100%;height:220px;background:#0d1117;color:#c9d1d9;border:1px solid #345;" \
   "font-family:ui-monospace,monospace;font-size:13px;padding:4px}" \
-  ".jog{display:flex;gap:12px;margin:8px 0 18px}" \
-  ".jog button{flex:1;font-size:18px;padding:14px;background:#246;color:#fff;border:0;border-radius:8px;touch-action:none;" \
+  ".jog{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 18px}" \
+  ".jog button{font-size:15px;padding:10px 16px;background:#246;color:#fff;border:0;border-radius:8px;touch-action:none;" \
   "user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}" \
   ".jog button:active{background:#3a7}" \
+  ".jog input{width:84px;font-size:16px;padding:9px;background:#0d1117;color:#eee;border:1px solid #345;border-radius:6px}" \
+  ".jog #go{background:#2a7}.jog #stp{background:#a33}" \
   "input[type=file]{display:block;margin:16px 0}" \
   "input[type=submit]{font-size:16px;padding:10px 18px;background:#246;color:#fff;border:0;border-radius:6px}"
 
@@ -188,10 +190,13 @@ static const char HOME_PAGE[] PROGMEM =
   "<g fill='#6cf' font-size='14' text-anchor='middle'><text x='100' y='52'>N</text><text x='100' y='158'>S</text>"
   "<text x='166' y='106'>E</text><text x='34' y='106'>W</text></g>"
   "<g id='tg' visibility='hidden'><polygon points='100,15 93,2 107,2' fill='#fc3'/></g>"
-  "<g id='ndl'><polygon points='100,24 94,100 106,100' fill='#e33'/><polygon points='100,176 94,100 106,100' fill='#456'/></g>"
+  "<g id='ndl'><rect x='97' y='50' width='6' height='50' fill='#e33'/><polygon points='100,24 87,52 113,52' fill='#e33'/></g>"
   "<circle cx='100' cy='100' r='5' fill='#9ab'/></svg></div>"
   "<p class='note'>Target <span id='tgt'>-</span> &nbsp; Debug <span id='dbg'>-</span> &nbsp; Heap <span id='hp'>-</span></p>"
-  "<div class='jog'><button id='ccw' type='button'>CCW</button><button id='cw' type='button'>CW</button></div>"
+  "<div class='jog'><button id='ccw' type='button'>CCW</button><button id='cw' type='button'>CW</button>"
+  "<input id='gaz' type='number' inputmode='numeric' min='0' max='359' placeholder='0-359'>"
+  "<button id='go' type='button'>GO</button><button id='stp' type='button'>STOP</button>"
+  "<span id='gmsg' class='note'></span></div>"
   "<h2>rotctld / debug</h2>"
   "<select class='log' id='log' size='12'></select>"
   "<script>"
@@ -222,6 +227,12 @@ static const char HOME_PAGE[] PROGMEM =
   "window.addEventListener('blur',stop);window.addEventListener('pagehide',stop);"
   "document.addEventListener('visibilitychange',stop);}"
   "bindJog('ccw','ccw');bindJog('cw','cw');"
+  "const hdr={'Content-Type':'application/x-www-form-urlencoded'};"
+  "const say=m=>{gmsg.textContent=m;setTimeout(()=>{gmsg.textContent='';},2500);};"
+  "const send2=b=>fetch('/go',{method:'POST',headers:hdr,body:b}).then(r=>say(r.ok?'ok':r.status==409?'busy':'rejected')).catch(()=>say('no answer'));"
+  "go.onclick=()=>{const v=gaz.value.trim();if(!/^\\d{1,3}$/.test(v)||+v>359){say('0-359');gaz.focus();return;}send2('az='+v);};"
+  "stp.onclick=()=>send2('stop=1');"
+  "gaz.addEventListener('keydown',e=>{if(e.key=='Enter')go.click();});"
   "</script></main></body></html>";
 
 static const char UPDATE_PAGE[] PROGMEM =
@@ -391,6 +402,31 @@ static void otaBegin() {
     httpOta.send(200, "text/plain", "ok");
   });
 
+  httpOta.on("/go", HTTP_POST, []() {
+    if (httpOta.hasArg("stop")) {  // stop is always accepted
+      webJog = 0;
+      if (b_autorotate) webLog("web", "stop");
+      stopAutorotate();
+      httpOta.send(200, "text/plain", "ok");
+      return;
+    }
+    String a = httpOta.arg("az");
+    bool digits = a.length() > 0 && a.length() <= 3;
+    for (unsigned i = 0; digits && i < a.length(); i++) digits = isDigit(a.charAt(i));
+    int v = digits ? a.toInt() : -1;
+    if (v < 0 || v > 359) {
+      httpOta.send(400, "text/plain", "angle 0-359");
+      return;
+    }
+    if (otaBusy || menuOpen || b_autorotate || but_BRK || calIsActive() || webJog) {
+      httpOta.send(409, "text/plain", "busy");
+      return;
+    }
+    applyAzimuthTarget(v);
+    webLog("web", (String("goto ") + v).c_str());
+    httpOta.send(200, "text/plain", "ok");
+  });
+
   httpOta.on("/update", HTTP_GET, []() {
     httpOta.send_P(200, "text/html", UPDATE_PAGE);
   });
@@ -516,6 +552,21 @@ void wifiStop() {
   wifiWanted = false;
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
+}
+
+bool wifiCaptureCurrentIp() {  // seeds the static fields with the live DHCP lease
+  if (!linkWantsWifi() || WiFi.status() != WL_CONNECTED) return false;
+  IPAddress dns = WiFi.dnsIP();
+  if (dns == IPAddress((uint32_t)0)) dns = WiFi.gatewayIP();
+  ipLocal = WiFi.localIP().toString();
+  ipGw = WiFi.gatewayIP().toString();
+  ipMask = WiFi.subnetMask().toString();
+  ipDns = dns.toString();
+  preferences.putString("ip_local", ipLocal);
+  preferences.putString("ip_gw", ipGw);
+  preferences.putString("ip_mask", ipMask);
+  preferences.putString("ip_dns", ipDns);
+  return true;
 }
 
 void wifiRestart() {
